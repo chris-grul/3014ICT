@@ -1,0 +1,22 @@
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state invalid drop
+		ct state established,related accept
+		iifname "lo" accept
+		ip6 nexthdr ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, echo-reply, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+		ip saddr 49.255.230.48/29 tcp dport 22 accept
+		ip6 saddr 2402:7800:2014::/48 tcp dport 22 accept
+		meta nfproto ipv4 tcp dport 443 accept
+	}
+}
+table ip6 filter {
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		tcp flags syn tcp option maxseg size set rt mtu
+		ip6 saddr 2402:7800:2014::/48 ip6 daddr 2404:9400:29c1:df00::/56 tcp dport 22 ct state new accept
+		iifname "wg0" oifname "eth0" accept
+		iifname "eth0" oifname "wg0" ct state invalid drop
+		iifname "eth0" oifname "wg0" accept
+	}
+}

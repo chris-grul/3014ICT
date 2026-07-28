@@ -1,0 +1,16 @@
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "00:16:3e:e9:c1:df"
+      addresses:
+      - "112.213.39.252/24"
+      nameservers:
+        addresses:
+        - 43.229.61.2
+        - 43.229.62.2
+        - 8.8.8.8
+      gateway4: 112.213.39.1
+      set-name: "eth0"
+      mtu: 1500

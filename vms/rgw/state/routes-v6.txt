@@ -1,0 +1,5 @@
+2404:9400:2::/64 dev eth0 proto ra metric 512 pref high
+2404:9400:29c1:df00::/64 dev wg0 proto kernel metric 256 pref medium
+2404:9400:29c1:df00::/56 dev wg0 metric 1024 pref medium
+fe80::/64 dev eth0 proto kernel metric 256 pref medium
+default nhid 1836273473 via fe80::fc00:ff:fe00:1 dev eth0 proto ra metric 512 expires 23sec pref high

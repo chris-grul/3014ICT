@@ -1,0 +1,2 @@
+default via 112.213.39.1 dev eth0 proto static 
+112.213.39.0/24 dev eth0 proto kernel scope link src 112.213.39.252 
