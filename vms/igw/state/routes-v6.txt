@@ -1,0 +1,5 @@
+2404:9400:29c1:df10::/64 dev eth0 proto kernel metric 256 pref medium
+2404:9400:29c1:df20::/64 dev eth1 proto kernel metric 256 pref medium
+fe80::/64 dev eth0 proto kernel metric 256 pref medium
+fe80::/64 dev eth1 proto kernel metric 256 pref medium
+default via 2404:9400:29c1:df10::254 dev eth0 proto static metric 1024 pref medium
