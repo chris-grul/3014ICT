@@ -1,0 +1,61 @@
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ip6 saddr 2402:7800:2014::/48 tcp dport 22 ct state new accept
+		ip saddr 172.16.10.0/24 tcp dport 22 ct state new accept
+		ip6 saddr 2404:9400:29c1:df00::/56 accept
+		ct state invalid drop
+		ct state established,related accept
+		iifname "lo" accept
+		iif "eth1" accept
+		ip6 nexthdr ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, echo-reply, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+	}
+}
+table ip filter {
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		iif "eth1" oif "eth0" accept
+		iif "eth0" oif "eth1" tcp dport { 80, 443 } accept
+		iif "eth0" oif "eth1" ct state invalid drop
+		iif "eth0" oif "eth1" ct state established,related accept
+	}
+}
+table ip6 filter {
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		tcp flags syn tcp option maxseg size set rt mtu
+		iifname "eth1" oifname "wg0" accept
+		ip6 saddr 2404:9400:29c1:df00::/56 accept
+		iifname "wg0" oifname "eth1" ip6 saddr 2402:7800:2014::/48 tcp dport 22 ct state new accept
+		iifname "wg0" oifname "eth1" tcp dport { 80, 443 } accept
+		iifname "wg0" oifname "eth1" ct state invalid drop
+		iifname "wg0" oifname "eth1" ct state established,related accept
+	}
+}
+table ip nat {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		iif "eth0" tcp dport { 80, 443 } dnat to 192.168.1.80
+	}
+
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oif "eth0" masquerade
+	}
+}
+table ip6 wg-quick-wg0 {
+	chain preraw {
+		type filter hook prerouting priority raw; policy accept;
+		iifname != "wg0" ip6 daddr 2404:9400:29c1:df00::1 fib saddr type != local drop
+	}
+
+	chain premangle {
+		type filter hook prerouting priority mangle; policy accept;
+		meta l4proto udp meta mark set ct mark
+	}
+
+	chain postmangle {
+		type filter hook postrouting priority mangle; policy accept;
+		meta l4proto udp meta mark 0x0000ca6c ct mark set meta mark
+	}
+}

@@ -1,0 +1,13 @@
+interface: wg0
+  public key: tAfyBZkLBZFOjHYGWiO2xtu5stanS8TOsloTk07GSys=
+  private key: (hidden)
+  listening port: 49760
+  fwmark: 0xca6c
+
+peer: d+lPLoY6Ra/Wgf1TleES99OBpqxYApwEZu3LvSXFFXo=
+  preshared key: (hidden)
+  endpoint: 127.0.0.1:51820
+  allowed ips: ::/0
+  latest handshake: 35 seconds ago
+  transfer: 180.64 KiB received, 182.43 KiB sent
+  persistent keepalive: every 25 seconds

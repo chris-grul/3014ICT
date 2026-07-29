@@ -1,0 +1,6 @@
+default via 172.16.10.254 dev eth0 proto dhcp src 172.16.10.100 metric 100 
+10.10.1.0/24 via 192.168.1.1 dev eth1 proto static 
+168.63.129.16 via 172.16.10.254 dev eth0 proto dhcp src 172.16.10.100 metric 100 
+172.16.10.0/24 dev eth0 proto kernel scope link src 172.16.10.100 metric 100 
+172.16.10.254 dev eth0 proto dhcp scope link src 172.16.10.100 metric 100 
+192.168.1.0/24 dev eth1 proto kernel scope link src 192.168.1.254 
