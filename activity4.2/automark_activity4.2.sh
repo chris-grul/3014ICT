@@ -18,6 +18,21 @@
 #   E9 — nftables UDP 1194 rules missing on External Gateway
 #   E10 — VPN not connected on Client VM (tun0 absent or wrong IP)
 #
+#   ---- IPv6 test layer (added; mirrors the IPv4 checks, non-destructive) ----
+#   E11 — IPv6 addressing wrong/missing (eth0/eth1/wg0/tun0 inet6)
+#   E12 — IPv6 routing wrong/missing (ip -6 route get)
+#   E13 — IPv6 forwarding not enabled (net.ipv6.conf.all.forwarding)
+#   E14 — IPv6 nftables rule missing (UDP 1194 accept in ip6/inet family)
+#   E15 — IPv6 connectivity failed (ping6 to a lab peer / across the tunnel)
+#   E16 — No IPv6 internet access
+#   E17 — OpenVPN IPv6 service not listening on a v6 transport (when v6-configured)
+#
+#   NOTE: The author's supplied OpenVPN config is IPv4-only (proto udp, server
+#   10.8.0.0). All OpenVPN-over-IPv6 checks below are marked "# ASSUMPTION:" and
+#   are SOFT — they only fail loudly when the config actually shows IPv6 intent
+#   (proto udp6 / server-ipv6 / tun-ipv6); otherwise they warn and skip. See the
+#   augmentation report for the exact items the author must confirm.
+#
 # Usage: sudo bash automark_activity4.2.sh
 # =============================================================================
 
@@ -52,6 +67,133 @@ section() { echo ""; echo -e "${BOLD}--- $1 ---${NC}"; }
 has_ip() {
     ip addr show 2>/dev/null | grep -q "$1"
 }
+
+# ============================================================================
+#  SHARED IPv6 HELPER BLOCK  —  pasted verbatim, placed AFTER the existing
+#  helper/check functions and BEFORE the run_<vm>() funcs. These names are
+#  unique and won't clash with existing helpers. They reuse the script's
+#  existing pass()/fail()/section()/CYAN/NC.
+# ============================================================================
+
+# ---- IPv6 diagnostics ----
+diag_ip6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 addresses:${NC}"
+    ip -6 -br addr show 2>/dev/null | sed 's/^/                /'
+}
+diag_routes6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 routes:${NC}"
+    ip -6 route show 2>/dev/null | sed 's/^/                /'
+    ip -6 route show table 51820 2>/dev/null | sed 's/^/                [t51820] /'
+}
+
+# ---- IPv6 addressing ----
+# check_ip6 <iface> <expected-cidr e.g. 2404:9400:29c1:df10::80/64> <code>
+check_ip6() {
+    local iface=$1 expected=$2 code=$3
+    if ip -6 addr show "$iface" 2>/dev/null | grep -qF "inet6 $expected"; then
+        pass "$iface = $expected"
+    else
+        local actual
+        actual=$(ip -6 addr show "$iface" 2>/dev/null | grep "inet6 " | grep -v "fe80" | awk '{print $2}' | tr '\n' ' ')
+        fail "$code" "$iface = $expected  (found: ${actual:-none})"
+        diag_ip6
+    fi
+}
+# check_ip6_has_global <iface> <code>   (for SLAAC/unknown addresses)
+check_ip6_has_global() {
+    local iface=$1 code=$2
+    if ip -6 addr show "$iface" scope global 2>/dev/null | grep -q "inet6 "; then
+        local a
+        a=$(ip -6 addr show "$iface" scope global 2>/dev/null | grep "inet6 " | awk '{print $2}' | tr '\n' ' ')
+        pass "$iface has a global IPv6 address ($a)"
+    else
+        fail "$code" "$iface has no global IPv6 address"; diag_ip6
+    fi
+}
+
+# ---- IPv6 routing (uses `ip -6 route get`, so it also sees wg-quick table 51820) ----
+# check_route6_get <dest> <expected-substr e.g. 'via 2404:...df10::254' or 'dev wg0'> <code> <label>
+check_route6_get() {
+    local dest=$1 expect=$2 code=$3 label=$4 out
+    out=$(ip -6 route get "$dest" 2>/dev/null)
+    if echo "$out" | grep -q "$expect"; then
+        pass "IPv6 route to $label — $expect"
+    else
+        fail "$code" "IPv6 route to $label not '$expect'  (got: ${out:-none})"; diag_routes6
+    fi
+}
+
+# ---- IPv6 forwarding ----
+check_ip6_forward() {
+    local code=$1 val
+    val=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
+    if [ "$val" = "1" ]; then pass "IPv6 forwarding enabled (net.ipv6.conf.all.forwarding = 1)"
+    else fail "$code" "IPv6 forwarding not enabled (value: ${val:-unreadable})"; fi
+}
+
+# ---- IPv6 connectivity ----
+check_ping6() {
+    local target=$1 label=$2 code=$3
+    if ping -6 -c 2 -W 2 "$target" &>/dev/null; then pass "Ping6 $label ($target)"
+    else fail "$code" "Cannot ping6 $label ($target)"; fi
+}
+check_internet6() {
+    local code=$1
+    if ping -6 -c 2 -W 3 2001:4860:4860::8888 &>/dev/null; then
+        pass "IPv6 internet reachable (ping 2001:4860:4860::8888)"; return; fi
+    local http
+    http=$(curl -6 -s -o /dev/null -w "%{http_code}" --max-time 8 -L https://www.google.com 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 internet reachable (HTTP $http over IPv6)"; return; fi
+    fail "$code" "No IPv6 internet access (ping6 + curl -6 both failed)"; diag_routes6
+}
+
+# ---- IPv6 service listener (checks something is bound on a v6 address:port) ----
+# check_listen6 <port> <label> <code>
+check_listen6() {
+    local port=$1 label=$2 code=$3 laddrs
+    laddrs=$(ss -H -ltn "( sport = :$port )" 2>/dev/null | awk '{print $4}')
+    # v6 listener shows as [::]:port, [::1]:port, [2404:...]:port, or *:port (dual-stack)
+    if echo "$laddrs" | grep -qE '^\[|^\*:'; then
+        pass "$label listening on IPv6 (port $port)"
+    else
+        fail "$code" "$label not listening on IPv6 (port $port) — found: ${laddrs:-none}"
+    fi
+}
+
+# ---- HTTP(S) over IPv6 (forces -6; use a literal [addr] or a AAAA name) ----
+# check_curl6 <url> <label> <code>   e.g. check_curl6 "https://[2404:...df10::80]/" "server" E13
+check_curl6() {
+    local url=$1 label=$2 code=$3 http
+    http=$(curl -6 -sk -o /dev/null -w "%{http_code}" --max-time 8 -L "$url" 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 HTTP $http from $label ($url)"
+    else fail "$code" "No IPv6 HTTP from $label ($url) — code: ${http:-none}"; fi
+}
+
+# ---- Generic nftables rule presence (family-agnostic; whitespace-normalised) ----
+# Accepts iif/iifname and oif/oifname by writing your regex with iif(name)? etc.
+# check_nft6 '<extended-regex>' '<pass message>' <code>
+check_nft6() {
+    local re=$1 msg=$2 code=$3 norm
+    norm=$(nft list ruleset 2>/dev/null | tr -s ' \t\n' ' ')
+    if echo "$norm" | grep -qE "$re"; then pass "$msg"
+    else
+        fail "$code" "missing nft rule: $msg"
+        echo -e "         ${CYAN}[DIAG] nft ruleset (head):${NC}"
+        nft list ruleset 2>/dev/null | sed 's/^/                /' | head -40
+    fi
+}
+
+# ---- DNS AAAA / reverse-v6 helpers (for the DNS/mail activities) ----
+# check_aaaa <name> <server-or-empty> <code>   (server may be @host or blank for system resolver)
+check_aaaa() {
+    local name=$1 server=$2 code=$3 out
+    out=$(dig +short ${server:+@$server} AAAA "$name" 2>/dev/null | grep -E ':' | head -1)
+    if [ -n "$out" ]; then pass "AAAA $name ${server:+via $server} -> $out"
+    else fail "$code" "no AAAA for $name ${server:+via $server}"; fi
+}
+# ============================================================================
+#  END SHARED IPv6 HELPER BLOCK
+# ============================================================================
 
 # =============================================================================
 # Detect VM
@@ -257,6 +399,56 @@ run_internal_gateway() {
     else
         fail "E8" "base.conf missing from $CLIENT_CONFIGS/ — copy sample client config and edit it"
     fi
+
+    # =========================================================================
+    # ============================  IPv6 TEST LAYER  ==========================
+    # Mirrors the IPv4 checks above using the lab's routed /56
+    # (2404:9400:29c1:df00::/56). Non-destructive / read-only.
+    # This VM is the OpenVPN SERVER (the ExtGW DNATs UDP 1194 here → 192.168.1.1).
+    # =========================================================================
+    section "IPv6 Addressing"
+    # Internal Gateway: eth0 = DMZ side, eth1 = internal side (mirrors 192.168.1.1 / 10.10.1.254)
+    check_ip6 eth0 "2404:9400:29c1:df10::1/64"   E11
+    check_ip6 eth1 "2404:9400:29c1:df20::254/64" E11
+
+    section "IPv6 Routing"
+    # Default v6 route to the internet is via the External Gateway (DMZ side)
+    check_route6_get "2001:4860:4860::8888" "via 2404:9400:29c1:df10::254" E12 "internet (via ExtGW ::df10::254)"
+
+    section "IPv6 Forwarding"
+    check_ip6_forward E13
+
+    section "IPv6 Connectivity"
+    check_ping6 "2404:9400:29c1:df10::254" "External Gateway (DMZ)" E15
+    check_ping6 "2404:9400:29c1:df10::80"  "Ubuntu Server"          E15
+    check_ping6 "2404:9400:29c1:df20::1"   "Ubuntu Desktop"         E15
+
+    section "IPv6 Internet"
+    check_internet6 E16
+
+    section "IPv6 — OpenVPN server transport"
+    # ASSUMPTION: the supplied server.conf is IPv4-only ('proto udp' + 'server 10.8.0.0').
+    # Every item below is SOFT — it only fails when server.conf actually shows IPv6 intent.
+    SRVCONF="/etc/openvpn/server.conf"
+    if [ -f "$SRVCONF" ] && grep -Eq '^[[:space:]]*(proto[[:space:]]+udp6|proto[[:space:]]+tcp6|server-ipv6|tun-ipv6)' "$SRVCONF"; then
+        info "server.conf shows IPv6 intent — enforcing OpenVPN IPv6 checks"
+        # ASSUMPTION: a v6-configured server listens on an IPv6 transport for 1194
+        check_listen6 1194 "OpenVPN server" E17
+        # ASSUMPTION: tun0 carries a global IPv6 (from the server-ipv6 pool); exact subnet unknown
+        check_ip6_has_global tun0 E11
+        # ASSUMPTION: connected clients sit at <tun0-prefix>::1000+ ; best-effort ping of one
+        TUN6NET=$(ip -6 route show dev tun0 2>/dev/null | awk '/\/64/{print $1; exit}')
+        if [ -n "$TUN6NET" ]; then
+            PEER6="${TUN6NET%::/64}::1000"
+            info "ASSUMPTION: pinging first VPN client across the tunnel ($PEER6)"
+            check_ping6 "$PEER6" "VPN client over tunnel" E15
+        else
+            warn "tun0 has no IPv6 /64 route — cannot derive a tunnel peer to ping6 (skipped)"
+        fi
+    else
+        warn "server.conf has no IPv6 directive (proto udp6 / server-ipv6 / tun-ipv6) — OpenVPN IPv6 transport not configured; skipping v6 VPN checks"
+        info "ASSUMPTION: to enable, add e.g. 'proto udp6' and 'server-ipv6 2404:9400:29c1:dfXX::/64' to server.conf"
+    fi
 }
 
 # =============================================================================
@@ -294,6 +486,68 @@ run_external_gateway() {
     else
         warn "HTTP/HTTPS/SMTP forward rules may be missing — verify Activity 4-1 rules were not overwritten"
     fi
+
+    # =========================================================================
+    # ============================  IPv6 TEST LAYER  ==========================
+    # Mirrors the IPv4 path using the lab's routed /56 (2404:9400:29c1:df00::/56).
+    # Non-destructive / read-only.
+    # =========================================================================
+    section "IPv6 Addressing"
+    # ASSUMPTION: ExtGW carries the transit /64 on wg0 and the DMZ /64 on eth1 (lab-wide table)
+    check_ip6 wg0  "2404:9400:29c1:df00::1/64"   E11
+    check_ip6 eth1 "2404:9400:29c1:df10::254/64" E11
+
+    section "IPv6 Routing"
+    # Default v6 route to the internet leaves via the tunnel (wg0); lives in table 51820
+    check_route6_get "2001:4860:4860::8888" "dev wg0" E12 "internet (dev wg0)"
+    # Route to an internal /64 host goes via the Internal Gateway (DMZ side)
+    check_route6_get "2404:9400:29c1:df20::1" "via 2404:9400:29c1:df10::1" E12 "internal ::df20::1 (via IntGW)"
+
+    section "IPv6 Forwarding"
+    check_ip6_forward E13
+
+    section "IPv6 Connectivity"
+    check_ping6 "2404:9400:29c1:df10::1"  "Internal Gateway (DMZ)" E15
+    check_ping6 "2404:9400:29c1:df10::80" "Ubuntu Server"          E15
+    check_ping6 "2404:9400:29c1:df20::1"  "Ubuntu Desktop"         E15
+
+    section "IPv6 Internet"
+    check_internet6 E16
+
+    section "IPv6 — Tunnel services"
+    # ASSUMPTION: the lab-wide IPv6 uplink rides a wg0 tunnel; only checked if wg0 exists.
+    if ip link show wg0 >/dev/null 2>&1; then
+        if systemctl is-active --quiet wg-quick@wg0; then
+            pass "wg-quick@wg0 active"
+        else
+            fail "E11" "wg-quick@wg0 not active — the IPv6 uplink tunnel is down"
+        fi
+        if command -v wg >/dev/null 2>&1; then
+            HS=$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}' | sort -n | tail -1)
+            if [[ "$HS" =~ ^[0-9]+$ ]] && [ "$HS" -gt 0 ]; then
+                pass "WireGuard handshake present on wg0 (latest=$HS)"
+            else
+                warn "no WireGuard handshake on wg0 yet (latest-handshakes=0) — tunnel may be idle"
+            fi
+        fi
+        if systemctl list-unit-files 2>/dev/null | grep -q 'wstunnel'; then
+            if systemctl is-active --quiet 'wstunnel*' 2>/dev/null; then
+                pass "wstunnel client active"
+            else
+                warn "wstunnel client not active (ASSUMPTION: only relevant if the lab uses wstunnel)"
+            fi
+        fi
+    else
+        warn "wg0 interface absent — this ExtGW may not run the lab IPv6 tunnel; skipping tunnel checks (ASSUMPTION)"
+    fi
+
+    section "IPv6 — nftables UDP 1194"
+    # Mirror of the IPv4 UDP 1194 path. In IPv4 this activity uses DNAT→192.168.1.1 + SNAT.
+    # ASSUMPTION: over IPv6 the lab routes natively (no NAT), so the mirrored v6 rule is a
+    # plain forward ACCEPT of 'udp dport 1194' toward the server in the ip6/inet family.
+    # nft rule check accepts both iif/iifname and oif/oifname.
+    check_nft6 'table (ip6|inet).*(iif(name)?|oif(name)?)?[^}]*udp dport 1194[^}]*accept' \
+               "IPv6 forward accept for UDP 1194 present (ip6/inet family)" E14
 }
 
 # =============================================================================
@@ -336,6 +590,38 @@ run_openvpn_client() {
         info "Connect via terminal: sudo openvpn --config ~/client1.ovpn"
         info "Check TLS auth direction: server.conf must use 'tls-auth ta.key 0', base.conf must use 'tls-auth ta.key 1'"
     fi
+
+    # =========================================================================
+    # ============================  IPv6 TEST LAYER  ==========================
+    # Non-destructive / read-only. The supplied client1.ovpn is IPv4-only
+    # ('proto udp' + IPv4 'remote'), so the VPN-over-IPv6 checks are SOFT.
+    # =========================================================================
+    section "IPv6 — VPN over IPv6 (across the tunnel)"
+    OVPN="$USER_HOME/client1.ovpn"
+    if [ -f "$OVPN" ] && grep -Eiq '^[[:space:]]*proto[[:space:]]+(udp6|tcp6)|^[[:space:]]*remote[[:space:]]+[0-9a-f]*:[0-9a-f:]+' "$OVPN"; then
+        info "client1.ovpn shows IPv6 intent — enforcing IPv6 tunnel checks"
+        if ip addr show tun0 >/dev/null 2>&1; then
+            # ASSUMPTION: tun0 receives a global IPv6 from the server's server-ipv6 pool
+            check_ip6_has_global tun0 E11
+            # ASSUMPTION: the server end of the tunnel is <tun0-prefix>::1
+            TUN6NET=$(ip -6 route show dev tun0 2>/dev/null | awk '/\/64/{print $1; exit}')
+            if [ -n "$TUN6NET" ]; then
+                PEER6="${TUN6NET%::/64}::1"
+                info "ASSUMPTION: pinging the OpenVPN server end of the tunnel ($PEER6)"
+                check_ping6 "$PEER6" "OpenVPN server over tunnel" E15
+            else
+                warn "tun0 has no IPv6 /64 route — cannot derive the server tunnel address (skipped)"
+            fi
+        else
+            fail "E15" "tun0 absent — cannot verify IPv6 across the tunnel (VPN not connected)"
+        fi
+    else
+        warn "client1.ovpn has no IPv6 directive (proto udp6 / IPv6 remote) — VPN-over-IPv6 not configured; skipping (ASSUMPTION)"
+        info "ASSUMPTION: to test, the server must push an IPv6 tunnel (server-ipv6) and the client use an IPv6 transport"
+    fi
+
+    section "IPv6 Internet (host)"
+    check_internet6 E16
 }
 
 # =============================================================================

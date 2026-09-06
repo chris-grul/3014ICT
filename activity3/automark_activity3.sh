@@ -18,6 +18,18 @@
 #   E22 — smtpd_relay_restrictions missing — smtpd crashes on startup
 #   E4  — nftables port 25 rules missing on External Gateway
 #
+#   --- IPv6 layer (added; mirrors the IPv4 checks) ---
+#   E23 — IPv6 addressing wrong/missing on an interface
+#   E24 — IPv6 routing (route-get) wrong/missing
+#   E25 — IPv6 forwarding not enabled (gateways)
+#   E26 — IPv6 nftables rule missing (e.g. v6 SMTP forward accept)
+#   E27 — IPv6 connectivity (ping6 to a lab peer) failed
+#   E28 — No IPv6 internet access
+#   E29 — IPv6 mail service problem (inet_protocols not all/ipv6, or
+#         Postfix/Dovecot not listening on IPv6, or SMTP/IMAP/POP3
+#         unreachable over IPv6)
+#   E30 — IPv6 DNS problem (no AAAA for mail.<domain>, or MX lost)
+#
 # Usage: sudo bash automark_activity3.sh
 # =============================================================================
 
@@ -103,6 +115,146 @@ detect_domain() {
     echo ""
 }
 
+# ============================================================================
+#  SHARED IPv6 HELPER BLOCK  —  paste verbatim into each automarker, placed
+#  AFTER the existing helper/check functions and BEFORE the run_<vm>() funcs.
+#  These names are unique and won't clash with existing helpers. They reuse the
+#  script's existing pass()/fail()/section()/CYAN/NC.
+# ============================================================================
+
+# ---- IPv6 diagnostics ----
+diag_ip6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 addresses:${NC}"
+    ip -6 -br addr show 2>/dev/null | sed 's/^/                /'
+}
+diag_routes6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 routes:${NC}"
+    ip -6 route show 2>/dev/null | sed 's/^/                /'
+    ip -6 route show table 51820 2>/dev/null | sed 's/^/                [t51820] /'
+}
+
+# ---- IPv6 addressing ----
+# check_ip6 <iface> <expected-cidr e.g. 2404:9400:29c1:df10::80/64> <code>
+check_ip6() {
+    local iface=$1 expected=$2 code=$3
+    if ip -6 addr show "$iface" 2>/dev/null | grep -qF "inet6 $expected"; then
+        pass "$iface = $expected"
+    else
+        local actual
+        actual=$(ip -6 addr show "$iface" 2>/dev/null | grep "inet6 " | grep -v "fe80" | awk '{print $2}' | tr '\n' ' ')
+        fail "$code" "$iface = $expected  (found: ${actual:-none})"
+        diag_ip6
+    fi
+}
+# check_ip6_has_global <iface> <code>   (for SLAAC/unknown addresses)
+check_ip6_has_global() {
+    local iface=$1 code=$2
+    if ip -6 addr show "$iface" scope global 2>/dev/null | grep -q "inet6 "; then
+        local a
+        a=$(ip -6 addr show "$iface" scope global 2>/dev/null | grep "inet6 " | awk '{print $2}' | tr '\n' ' ')
+        pass "$iface has a global IPv6 address ($a)"
+    else
+        fail "$code" "$iface has no global IPv6 address"; diag_ip6
+    fi
+}
+
+# ---- IPv6 routing (uses `ip -6 route get`, so it also sees wg-quick table 51820) ----
+# check_route6_get <dest> <expected-substr e.g. 'via 2404:...df10::254' or 'dev wg0'> <code> <label>
+check_route6_get() {
+    local dest=$1 expect=$2 code=$3 label=$4 out
+    out=$(ip -6 route get "$dest" 2>/dev/null)
+    if echo "$out" | grep -q "$expect"; then
+        pass "IPv6 route to $label — $expect"
+    else
+        fail "$code" "IPv6 route to $label not '$expect'  (got: ${out:-none})"; diag_routes6
+    fi
+}
+
+# ---- IPv6 forwarding ----
+check_ip6_forward() {
+    local code=$1 val
+    val=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
+    if [ "$val" = "1" ]; then pass "IPv6 forwarding enabled (net.ipv6.conf.all.forwarding = 1)"
+    else fail "$code" "IPv6 forwarding not enabled (value: ${val:-unreadable})"; fi
+}
+
+# ---- IPv6 connectivity ----
+check_ping6() {
+    local target=$1 label=$2 code=$3
+    if ping -6 -c 2 -W 2 "$target" &>/dev/null; then pass "Ping6 $label ($target)"
+    else fail "$code" "Cannot ping6 $label ($target)"; fi
+}
+check_internet6() {
+    local code=$1
+    if ping -6 -c 2 -W 3 2001:4860:4860::8888 &>/dev/null; then
+        pass "IPv6 internet reachable (ping 2001:4860:4860::8888)"; return; fi
+    local http
+    http=$(curl -6 -s -o /dev/null -w "%{http_code}" --max-time 8 -L https://www.google.com 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 internet reachable (HTTP $http over IPv6)"; return; fi
+    fail "$code" "No IPv6 internet access (ping6 + curl -6 both failed)"; diag_routes6
+}
+
+# ---- IPv6 service listener (checks something is bound on a v6 address:port) ----
+# check_listen6 <port> <label> <code>
+check_listen6() {
+    local port=$1 label=$2 code=$3 laddrs
+    laddrs=$(ss -H -ltn "( sport = :$port )" 2>/dev/null | awk '{print $4}')
+    # v6 listener shows as [::]:port, [::1]:port, [2404:...]:port, or *:port (dual-stack)
+    if echo "$laddrs" | grep -qE '^\[|^\*:'; then
+        pass "$label listening on IPv6 (port $port)"
+    else
+        fail "$code" "$label not listening on IPv6 (port $port) — found: ${laddrs:-none}"
+    fi
+}
+
+# ---- HTTP(S) over IPv6 (forces -6; use a literal [addr] or a AAAA name) ----
+# check_curl6 <url> <label> <code>   e.g. check_curl6 "https://[2404:...df10::80]/" "server" E13
+check_curl6() {
+    local url=$1 label=$2 code=$3 http
+    http=$(curl -6 -sk -o /dev/null -w "%{http_code}" --max-time 8 -L "$url" 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 HTTP $http from $label ($url)"
+    else fail "$code" "No IPv6 HTTP from $label ($url) — code: ${http:-none}"; fi
+}
+
+# ---- Generic nftables rule presence (family-agnostic; whitespace-normalised) ----
+# Accepts iif/iifname and oif/oifname by writing your regex with iif(name)? etc.
+# check_nft6 '<extended-regex>' '<pass message>' <code>
+check_nft6() {
+    local re=$1 msg=$2 code=$3 norm
+    norm=$(nft list ruleset 2>/dev/null | tr -s ' \t\n' ' ')
+    if echo "$norm" | grep -qE "$re"; then pass "$msg"
+    else
+        fail "$code" "missing nft rule: $msg"
+        echo -e "         ${CYAN}[DIAG] nft ruleset (head):${NC}"
+        nft list ruleset 2>/dev/null | sed 's/^/                /' | head -40
+    fi
+}
+
+# ---- DNS AAAA / reverse-v6 helpers (for the DNS/mail activities) ----
+# check_aaaa <name> <server-or-empty> <code>   (server may be @host or blank for system resolver)
+check_aaaa() {
+    local name=$1 server=$2 code=$3 out
+    out=$(dig +short ${server:+@$server} AAAA "$name" 2>/dev/null | grep -E ':' | head -1)
+    if [ -n "$out" ]; then pass "AAAA $name ${server:+via $server} -> $out"
+    else fail "$code" "no AAAA for $name ${server:+via $server}"; fi
+}
+
+# ============================================================================
+#  Activity-3-specific IPv6 helper (not in the shared block).
+#  Raw TCP reachability over IPv6 — curl can't test SMTP/IMAP/POP3, so we use
+#  bash's /dev/tcp against a literal v6 address. Bash accepts a bare IPv6
+#  address (no brackets) in /dev/tcp/<addr>/<port>.
+# ============================================================================
+# check_tcp6 <v6addr> <port> <label> <code>
+check_tcp6() {
+    local host=$1 port=$2 label=$3 code=$4
+    if timeout 3 bash -c "cat </dev/null >/dev/tcp/$host/$port" 2>/dev/null; then
+        pass "$label reachable over IPv6 ([$host]:$port)"
+    else
+        fail "$code" "$label not reachable over IPv6 ([$host]:$port)"
+    fi
+}
+
 # =============================================================================
 # Internal Gateway — Part A: MX record check
 # =============================================================================
@@ -180,6 +332,46 @@ run_internal_gateway() {
         pass "mail.$DOMAIN → 192.168.1.80"
     else
         fail "E14" "mail.$DOMAIN did not resolve to 192.168.1.80 (got: ${mail_a:-no response})"
+    fi
+
+    # =========================================================================
+    # IPv6 layer (mirrors the IPv4 checks above) — Internal Gateway
+    # =========================================================================
+    section "IPv6 Addressing (Internal Gateway)"
+    # eth0 = DMZ side, eth1 = internal side (mirrors 192.168.1.1 / 10.10.1.254)
+    check_ip6 eth0 2404:9400:29c1:df10::1/64 E23
+    check_ip6 eth1 2404:9400:29c1:df20::254/64 E23
+
+    section "IPv6 Forwarding (Internal Gateway)"
+    check_ip6_forward E25
+
+    section "IPv6 Routing (Internal Gateway)"
+    # Default route to the internet is via the External Gateway (DMZ side)
+    check_route6_get 2001:4860:4860::8888 "via 2404:9400:29c1:df10::254" E24 "internet (via ExtGW)"
+
+    section "IPv6 Connectivity (Internal Gateway)"
+    check_ping6 2404:9400:29c1:df10::254 "External Gateway" E27
+    check_ping6 2404:9400:29c1:df10::80  "Ubuntu Server"    E27
+    check_ping6 2404:9400:29c1:df20::1   "Ubuntu Desktop"   E27
+
+    section "IPv6 Internet (Internal Gateway)"
+    check_internet6 E28
+
+    # ---- Activity-3 IPv6 DNS: AAAA for mail.<domain> ----
+    # ASSUMPTION: the student added an AAAA record for mail.<domain> pointing to
+    # the server's IPv6 address 2404:9400:29c1:df10::80. If the zone is still
+    # IPv4-only this will (correctly) fail until the AAAA record is added.
+    if [ -n "$DOMAIN" ]; then
+        section "IPv6 DNS — AAAA for mail.$DOMAIN"
+        check_aaaa "mail.$DOMAIN" 127.0.0.1 E30
+        # MX must still resolve (regression) — mail routing is unchanged by v6
+        local mx6
+        mx6=$(dig @127.0.0.1 "$DOMAIN" MX +short +time=5 +tries=1 2>/dev/null | head -1)
+        if echo "$mx6" | grep -qE "^10 mail\.${DOMAIN}\.?$"; then
+            pass "MX record still resolves: $mx6"
+        else
+            fail "E30" "MX record no longer resolves after IPv6 changes (got: ${mx6:-empty})"
+        fi
     fi
 }
 
@@ -416,6 +608,52 @@ run_ubuntu_server() {
             info "Check: sudo journalctl -u postfix -u dovecot --no-pager | tail -20"
         fi
     fi
+
+    # =========================================================================
+    # IPv6 layer (mirrors the IPv4 checks above) — Ubuntu Server
+    # =========================================================================
+    section "IPv6 Addressing (Ubuntu Server)"
+    check_ip6 eth0 2404:9400:29c1:df10::80/64 E23
+
+    section "IPv6 Routing (Ubuntu Server)"
+    # Default gateway is the External Gateway (DMZ side)
+    check_route6_get 2001:4860:4860::8888 "via 2404:9400:29c1:df10::254" E24 "internet (via ExtGW)"
+
+    section "IPv6 Connectivity (Ubuntu Server)"
+    check_ping6 2404:9400:29c1:df10::254 "External Gateway" E27
+    check_ping6 2404:9400:29c1:df10::1   "Internal Gateway" E27
+
+    section "IPv6 Internet (Ubuntu Server)"
+    check_internet6 E28
+
+    # ---- Activity-3 IPv6 mail service checks ----
+    # Postfix must speak IPv6. The lab template ships inet_protocols = ipv4, so
+    # this check (correctly) fails until the student sets it to 'all' or 'ipv6'.
+    section "IPv6 Postfix — inet_protocols"
+    local inet_p
+    inet_p=$(postconf -h inet_protocols 2>/dev/null)
+    if echo "$inet_p" | grep -qwE 'all|ipv6'; then
+        pass "inet_protocols = $inet_p (IPv6 enabled)"
+    else
+        fail "E29" "inet_protocols is '$inet_p' — set to 'all' (or 'ipv6') in /etc/postfix/main.cf for IPv6"
+        info "Edit /etc/postfix/main.cf: inet_protocols = all , then: sudo systemctl restart postfix"
+    fi
+
+    section "IPv6 Mail Listeners (Ubuntu Server)"
+    # Postfix SMTP on [::]:25. ASSUMPTION: submission (587) is NOT configured in
+    # this lab (main.cf template has no submission service), so only 25 is checked.
+    check_listen6 25  "Postfix SMTP" E29
+    # Dovecot IMAP/POP3. ASSUMPTION: ssl = no in this lab (10-ssl.conf), so the
+    # implicit-TLS ports 993/995 are NOT expected — only 143 and 110 are checked.
+    check_listen6 143 "Dovecot IMAP" E29
+    check_listen6 110 "Dovecot POP3" E29
+
+    section "IPv6 Mail Reachability (Ubuntu Server → self)"
+    # SMTP/IMAP/POP3 over IPv6 to the server's own v6 address (curl can't do SMTP,
+    # so use a raw /dev/tcp connect to the literal IPv6 address).
+    check_tcp6 2404:9400:29c1:df10::80 25  "SMTP (25)"  E29
+    check_tcp6 2404:9400:29c1:df10::80 143 "IMAP (143)" E29
+    check_tcp6 2404:9400:29c1:df10::80 110 "POP3 (110)" E29
 }
 
 # =============================================================================
@@ -488,6 +726,44 @@ run_ubuntu_desktop() {
     else
         warn "Thunderbird profile not found (~/.thunderbird) — launch Thunderbird and add accounts"
     fi
+
+    # =========================================================================
+    # IPv6 layer (mirrors the IPv4 checks above) — Ubuntu Desktop
+    # =========================================================================
+    section "IPv6 Addressing (Ubuntu Desktop)"
+    check_ip6 eth0 2404:9400:29c1:df20::1/64 E23
+
+    section "IPv6 Routing (Ubuntu Desktop)"
+    # Default gateway is the Internal Gateway (internal side)
+    check_route6_get 2001:4860:4860::8888 "via 2404:9400:29c1:df20::254" E24 "internet (via IntGW)"
+
+    section "IPv6 Connectivity (Ubuntu Desktop)"
+    check_ping6 2404:9400:29c1:df20::254 "Internal Gateway" E27
+    check_ping6 2404:9400:29c1:df10::80  "Ubuntu Server"    E27
+
+    section "IPv6 Internet (Ubuntu Desktop)"
+    check_internet6 E28
+
+    # ---- Activity-3 IPv6 DNS: AAAA / MX via the Internal Gateway resolver ----
+    # ASSUMPTION: the Desktop resolves DNS via the Internal Gateway (10.10.1.254),
+    # matching the IPv4 MX check above.
+    if [ -n "$DOMAIN" ]; then
+        section "IPv6 DNS via Internal Gateway (mail.$DOMAIN)"
+        check_aaaa "mail.$DOMAIN" 10.10.1.254 E30
+        local mx6d
+        mx6d=$(dig @10.10.1.254 "$DOMAIN" MX +short +time=5 +tries=1 2>/dev/null | head -1)
+        if echo "$mx6d" | grep -qE "^10 mail\.${DOMAIN}\.?$"; then
+            pass "MX still resolves via 10.10.1.254: $mx6d"
+        else
+            fail "E30" "MX lookup via 10.10.1.254 failed (got: ${mx6d:-empty})"
+        fi
+    fi
+
+    section "IPv6 Mail Reachability (Ubuntu Desktop → Server)"
+    # curl can't test SMTP/IMAP/POP3 — use raw /dev/tcp to the server's v6 address.
+    check_tcp6 2404:9400:29c1:df10::80 25  "SMTP (25)"  E29
+    check_tcp6 2404:9400:29c1:df10::80 143 "IMAP (143)" E29
+    check_tcp6 2404:9400:29c1:df10::80 110 "POP3 (110)" E29
 }
 
 # =============================================================================
@@ -534,6 +810,65 @@ run_external_gateway() {
     else
         warn "HTTP DNAT rule missing — Activity 2 may need re-applying"
     fi
+
+    # =========================================================================
+    # IPv6 layer (mirrors the IPv4 checks above) — External Gateway
+    # =========================================================================
+    section "IPv6 Addressing (External Gateway)"
+    # wg0 = transit tunnel, eth1 = DMZ side (mirrors 192.168.1.254)
+    check_ip6 wg0  2404:9400:29c1:df00::1/64   E23
+    check_ip6 eth1 2404:9400:29c1:df10::254/64 E23
+
+    section "IPv6 Forwarding (External Gateway)"
+    check_ip6_forward E25
+
+    section "IPv6 Routing (External Gateway)"
+    # Default route to the internet leaves via the wireguard tunnel (table 51820)
+    check_route6_get 2001:4860:4860::8888 "dev wg0" E24 "internet (dev wg0)"
+    # Route to the internal network is via the Internal Gateway (DMZ side)
+    check_route6_get 2404:9400:29c1:df20::1 "via 2404:9400:29c1:df10::1" E24 "internal net (via IntGW)"
+
+    section "IPv6 Connectivity (External Gateway)"
+    check_ping6 2404:9400:29c1:df10::1  "Internal Gateway" E27
+    check_ping6 2404:9400:29c1:df10::80 "Ubuntu Server"    E27
+    check_ping6 2404:9400:29c1:df20::1  "Ubuntu Desktop"   E27
+
+    section "IPv6 Internet (External Gateway)"
+    check_internet6 E28
+
+    # ---- Tunnel services (present on the External Gateway in this lab topology) ----
+    # ASSUMPTION: the External Gateway reaches the lab via a wstunnel + WireGuard
+    # tunnel (as in the other activities). If this VM is a plain gateway without
+    # the tunnel, ignore these three checks.
+    section "IPv6 Tunnel Services (External Gateway)"
+    if systemctl is-active --quiet wg-quick@wg0 2>/dev/null; then
+        pass "wg-quick@wg0 is active"
+    else
+        fail "E27" "wg-quick@wg0 not active — IPv6 transit tunnel is down"
+    fi
+    if systemctl is-active --quiet wstunnel-client 2>/dev/null; then
+        pass "wstunnel-client is active"
+    else
+        warn "wstunnel-client not active (ASSUMPTION: this service name may differ in your setup)"
+    fi
+    local hs
+    hs=$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}' | sort -nr | head -1)
+    if [ -n "$hs" ] && [ "$hs" -gt 0 ] 2>/dev/null; then
+        pass "WireGuard peer has a recent handshake (wg0)"
+    else
+        warn "No WireGuard handshake seen on wg0 (ASSUMPTION: tunnel may be idle or not present)"
+    fi
+
+    # ---- Activity-3 IPv6 nft: SMTP (port 25) forward accept to the DMZ ----
+    # Mirrors the IPv4 rule 'iif "eth0" oif "eth1" tcp dport 25 ct state new accept'.
+    # In this lab that rule lives in 'table inet filter', which already covers IPv6,
+    # so a v6 SMTP forward accept is expected.
+    # ASSUMPTION: IPv6 uses native routing (global addresses), so a plain forward
+    # accept is expected rather than a v6 DNAT. The v6 ingress interface may be wg0
+    # (tunnel) or eth0 (uplink), so both are accepted below.
+    section "IPv6 nftables — SMTP forward accept (port 25)"
+    check_nft6 'table (ip6|inet) filter.*chain forward.*iif(name)? "(eth0|wg0)" oif(name)? "eth1" tcp dport 25 ct state new accept' \
+        'IPv6 forward accept for SMTP (port 25) to DMZ' E26
 }
 
 # =============================================================================

@@ -17,6 +17,15 @@
 #   E8  — Ubuntu Desktop cannot reach web server by domain name
 #   E9  — General connectivity failure
 #
+#   --- IPv6 test layer (mirrors the IPv4 checks above) ---
+#   E10 — IPv6 addressing wrong/missing on an interface
+#   E11 — IPv6 routing (default/internet route) wrong or missing
+#   E12 — IPv6 forwarding not enabled (Internal Gateway)
+#   E13 — IPv6 connectivity failure (ping6 neighbour / IPv6 internet)
+#   E14 — IPv6 DNS service: listen-on-v6 { any; } missing, or BIND9 not
+#         answering over IPv6 transport
+#   E15 — IPv6 DNS records: AAAA record and/or ip6.arpa reverse PTR missing
+#
 # Usage: sudo bash automark_activity2.2.sh
 # =============================================================================
 
@@ -218,6 +227,175 @@ check_dnssec_ad_flag() {
     fi
 }
 
+# ============================================================================
+#  SHARED IPv6 HELPER BLOCK  —  pasted verbatim from ipv6_helpers.sh.
+#  Placed AFTER the existing helper/check functions and BEFORE run_<vm>().
+#  Reuses the script's existing pass()/fail()/section()/CYAN/NC.
+# ============================================================================
+
+# ---- IPv6 diagnostics ----
+diag_ip6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 addresses:${NC}"
+    ip -6 -br addr show 2>/dev/null | sed 's/^/                /'
+}
+diag_routes6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 routes:${NC}"
+    ip -6 route show 2>/dev/null | sed 's/^/                /'
+    ip -6 route show table 51820 2>/dev/null | sed 's/^/                [t51820] /'
+}
+
+# ---- IPv6 addressing ----
+# check_ip6 <iface> <expected-cidr e.g. 2404:9400:29c1:df10::80/64> <code>
+check_ip6() {
+    local iface=$1 expected=$2 code=$3
+    if ip -6 addr show "$iface" 2>/dev/null | grep -qF "inet6 $expected"; then
+        pass "$iface = $expected"
+    else
+        local actual
+        actual=$(ip -6 addr show "$iface" 2>/dev/null | grep "inet6 " | grep -v "fe80" | awk '{print $2}' | tr '\n' ' ')
+        fail "$code" "$iface = $expected  (found: ${actual:-none})"
+        diag_ip6
+    fi
+}
+# check_ip6_has_global <iface> <code>   (for SLAAC/unknown addresses)
+check_ip6_has_global() {
+    local iface=$1 code=$2
+    if ip -6 addr show "$iface" scope global 2>/dev/null | grep -q "inet6 "; then
+        local a
+        a=$(ip -6 addr show "$iface" scope global 2>/dev/null | grep "inet6 " | awk '{print $2}' | tr '\n' ' ')
+        pass "$iface has a global IPv6 address ($a)"
+    else
+        fail "$code" "$iface has no global IPv6 address"; diag_ip6
+    fi
+}
+
+# ---- IPv6 routing (uses `ip -6 route get`, so it also sees wg-quick table 51820) ----
+# check_route6_get <dest> <expected-substr e.g. 'via 2404:...df10::254' or 'dev wg0'> <code> <label>
+check_route6_get() {
+    local dest=$1 expect=$2 code=$3 label=$4 out
+    out=$(ip -6 route get "$dest" 2>/dev/null)
+    if echo "$out" | grep -q "$expect"; then
+        pass "IPv6 route to $label — $expect"
+    else
+        fail "$code" "IPv6 route to $label not '$expect'  (got: ${out:-none})"; diag_routes6
+    fi
+}
+
+# ---- IPv6 forwarding ----
+check_ip6_forward() {
+    local code=$1 val
+    val=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
+    if [ "$val" = "1" ]; then pass "IPv6 forwarding enabled (net.ipv6.conf.all.forwarding = 1)"
+    else fail "$code" "IPv6 forwarding not enabled (value: ${val:-unreadable})"; fi
+}
+
+# ---- IPv6 connectivity ----
+check_ping6() {
+    local target=$1 label=$2 code=$3
+    if ping -6 -c 2 -W 2 "$target" &>/dev/null; then pass "Ping6 $label ($target)"
+    else fail "$code" "Cannot ping6 $label ($target)"; fi
+}
+check_internet6() {
+    local code=$1
+    if ping -6 -c 2 -W 3 2001:4860:4860::8888 &>/dev/null; then
+        pass "IPv6 internet reachable (ping 2001:4860:4860::8888)"; return; fi
+    local http
+    http=$(curl -6 -s -o /dev/null -w "%{http_code}" --max-time 8 -L https://www.google.com 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 internet reachable (HTTP $http over IPv6)"; return; fi
+    fail "$code" "No IPv6 internet access (ping6 + curl -6 both failed)"; diag_routes6
+}
+
+# ---- IPv6 service listener (checks something is bound on a v6 address:port) ----
+# check_listen6 <port> <label> <code>
+check_listen6() {
+    local port=$1 label=$2 code=$3 laddrs
+    laddrs=$(ss -H -ltn "( sport = :$port )" 2>/dev/null | awk '{print $4}')
+    # v6 listener shows as [::]:port, [::1]:port, [2404:...]:port, or *:port (dual-stack)
+    if echo "$laddrs" | grep -qE '^\[|^\*:'; then
+        pass "$label listening on IPv6 (port $port)"
+    else
+        fail "$code" "$label not listening on IPv6 (port $port) — found: ${laddrs:-none}"
+    fi
+}
+
+# ---- HTTP(S) over IPv6 (forces -6; use a literal [addr] or a AAAA name) ----
+# check_curl6 <url> <label> <code>   e.g. check_curl6 "https://[2404:...df10::80]/" "server" E13
+check_curl6() {
+    local url=$1 label=$2 code=$3 http
+    http=$(curl -6 -sk -o /dev/null -w "%{http_code}" --max-time 8 -L "$url" 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 HTTP $http from $label ($url)"
+    else fail "$code" "No IPv6 HTTP from $label ($url) — code: ${http:-none}"; fi
+}
+
+# ---- Generic nftables rule presence (family-agnostic; whitespace-normalised) ----
+# Accepts iif/iifname and oif/oifname by writing your regex with iif(name)? etc.
+# check_nft6 '<extended-regex>' '<pass message>' <code>
+check_nft6() {
+    local re=$1 msg=$2 code=$3 norm
+    norm=$(nft list ruleset 2>/dev/null | tr -s ' \t\n' ' ')
+    if echo "$norm" | grep -qE "$re"; then pass "$msg"
+    else
+        fail "$code" "missing nft rule: $msg"
+        echo -e "         ${CYAN}[DIAG] nft ruleset (head):${NC}"
+        nft list ruleset 2>/dev/null | sed 's/^/                /' | head -40
+    fi
+}
+
+# ---- DNS AAAA / reverse-v6 helpers (for the DNS/mail activities) ----
+# check_aaaa <name> <server-or-empty> <code>   (server may be @host or blank for system resolver)
+check_aaaa() {
+    local name=$1 server=$2 code=$3 out
+    out=$(dig +short ${server:+@$server} AAAA "$name" 2>/dev/null | grep -E ':' | head -1)
+    if [ -n "$out" ]; then pass "AAAA $name ${server:+via $server} -> $out"
+    else fail "$code" "no AAAA for $name ${server:+via $server}"; fi
+}
+
+# ============================================================================
+#  Activity 2.2 specific IPv6 DNS checks (BIND9 over IPv6)
+# ============================================================================
+
+# BIND9 must be told to listen on IPv6. Shipped config has `listen-on-v6 { none; };`
+# so students must change it to `{ any; }`. Grep the running config file directly.
+check_listen_on_v6_any() {
+    local code=$1 line
+    line=$(grep "listen-on-v6" /etc/bind/named.conf.options 2>/dev/null | head -1)
+    if echo "$line" | grep -qE 'listen-on-v6[[:space:]]*\{[[:space:]]*any[[:space:]]*;'; then
+        pass "named.conf.options has listen-on-v6 { any; }"
+    else
+        fail "$code" "listen-on-v6 { any; } missing in named.conf.options (found: ${line:-none})"
+        info "Edit named.conf.options: listen-on-v6 { any; };  then: sudo systemctl restart named"
+    fi
+}
+
+# Confirm BIND9 answers over IPv6 transport by querying an EXISTING A record via a
+# v6 server address (independent of whether AAAA records have been added yet).
+# check_dns6_transport <server-v6> <domain> <code>
+check_dns6_transport() {
+    local server=$1 zone=$2 code=$3 ans
+    if [ -z "$zone" ] || [ "$zone" = "." ]; then
+        fail "$code" "cannot test IPv6 DNS transport — domain not detected"; return
+    fi
+    ans=$(dig -6 @"$server" "www.$zone" A +short +time=5 +tries=1 2>/dev/null | head -1)
+    if [ -n "$ans" ]; then
+        pass "BIND9 answers over IPv6 transport (dig -6 @$server www.$zone -> $ans)"
+    else
+        fail "$code" "BIND9 did not answer over IPv6 transport at [$server] (needs listen-on-v6 { any; } + restart)"
+        info "Confirm: dig -6 @$server www.$zone  responds after enabling listen-on-v6 { any; }"
+    fi
+}
+
+# ip6.arpa reverse PTR for the server's IPv6 address, IF a v6 reverse zone exists.
+# check_reverse6 <server-v6-for-query> <target-v6-addr> <code>
+check_reverse6() {
+    local server=$1 target=$2 code=$3 ptr
+    ptr=$(dig -6 @"$server" -x "$target" +short +time=5 +tries=1 2>/dev/null | head -1)
+    if [ -n "$ptr" ]; then
+        pass "IPv6 reverse (ip6.arpa) PTR: $target -> $ptr"
+    else
+        fail "$code" "no ip6.arpa PTR for $target (add a reverse v6 zone if the activity requires it)"
+    fi
+}
+
 # =============================================================================
 # Internal Gateway checks
 # =============================================================================
@@ -252,6 +430,44 @@ run_internal_gateway() {
         && pass "Ping Ubuntu Desktop (10.10.1.1)" \
         || fail "E9" "Cannot ping Ubuntu Desktop (10.10.1.1)"
     check_internet "E9"
+
+    # =========================================================================
+    # IPv6 test layer (mirrors the IPv4 checks above) — Internal Gateway
+    # =========================================================================
+    # ASSUMPTION: DMZ-side interface is eth0 and internal-side interface is eth1
+    # (matches detect_vm's 192.168.1.1 / 10.10.1.254 roles). Adjust iface names
+    # if your VM uses different ones.
+    section "IPv6 Addressing (E10)"
+    check_ip6 eth0 2404:9400:29c1:df10::1/64 "E10"
+    check_ip6 eth1 2404:9400:29c1:df20::254/64 "E10"
+
+    section "IPv6 Forwarding (E12)"
+    check_ip6_forward "E12"
+
+    section "IPv6 Routing (E11)"
+    check_route6_get 2001:4860:4860::8888 "via 2404:9400:29c1:df10::254" "E11" "IPv6 internet (via External Gateway)"
+
+    section "IPv6 Connectivity (E13)"
+    check_ping6 2404:9400:29c1:df10::254 "External Gateway" "E13"
+    check_ping6 2404:9400:29c1:df10::80  "Ubuntu Server"    "E13"
+    check_ping6 2404:9400:29c1:df20::1   "Ubuntu Desktop"   "E13"
+    check_internet6 "E13"
+
+    section "IPv6 DNS Service — listen-on-v6 + IPv6 transport (E14)"
+    check_listen_on_v6_any "E14"
+    # BIND9 runs here; query it over its own IPv6 loopback (covered by listen-on-v6 { any; }).
+    local zone6
+    zone6=$(detect_domain)
+    check_dns6_transport "::1" "$zone6" "E14"
+
+    section "IPv6 DNS Records — AAAA + reverse ip6.arpa (E15)"
+    # ASSUMPTION: an AAAA record for www.<domain> pointing at the Ubuntu Server's
+    # IPv6 (2404:9400:29c1:df10::80) is expected. The shipped forward zone only
+    # ships A records, so add the AAAA if the activity requires IPv6 name resolution.
+    check_aaaa "www.$zone6" "::1" "E15"
+    # ASSUMPTION: an ip6.arpa reverse zone is expected for the DMZ /64. None ships
+    # in the base config; add one (or remove this check) to match your activity.
+    check_reverse6 "::1" 2404:9400:29c1:df10::80 "E15"
 }
 
 # =============================================================================
@@ -302,6 +518,32 @@ run_ubuntu_server() {
 
     section "Internet Access"
     check_internet "E9"
+
+    # =========================================================================
+    # IPv6 test layer (mirrors the IPv4 checks above) — Ubuntu Server
+    # =========================================================================
+    # ASSUMPTION: single interface is eth0.
+    section "IPv6 Addressing (E10)"
+    check_ip6 eth0 2404:9400:29c1:df10::80/64 "E10"
+
+    section "IPv6 Routing (E11)"
+    check_route6_get 2001:4860:4860::8888 "via 2404:9400:29c1:df10::254" "E11" "IPv6 internet (via External Gateway)"
+
+    section "IPv6 Connectivity (E13)"
+    check_ping6 2404:9400:29c1:df10::254 "External Gateway" "E13"
+    check_ping6 2404:9400:29c1:df10::1   "Internal Gateway" "E13"
+    check_internet6 "E13"
+
+    # DNS client checks: this VM points at BIND9 on the Internal Gateway. Query the
+    # gateway's DMZ-side IPv6 address to confirm IPv6 DNS works end-to-end.
+    section "IPv6 DNS via Internal Gateway (E14/E15)"
+    if [ -n "$DOMAIN" ]; then
+        check_dns6_transport 2404:9400:29c1:df10::1 "$DOMAIN" "E14"
+        # ASSUMPTION: AAAA for www.<domain> -> 2404:9400:29c1:df10::80 is expected.
+        check_aaaa "www.$DOMAIN" 2404:9400:29c1:df10::1 "E15"
+    else
+        fail "E14" "Cannot test IPv6 DNS — domain not detected (resolve E6 first)"
+    fi
 }
 
 # =============================================================================
@@ -370,6 +612,32 @@ run_ubuntu_desktop() {
 
     section "Internet Access"
     check_internet "E9"
+
+    # =========================================================================
+    # IPv6 test layer (mirrors the IPv4 checks above) — Ubuntu Desktop
+    # =========================================================================
+    # ASSUMPTION: single interface is eth0.
+    section "IPv6 Addressing (E10)"
+    check_ip6 eth0 2404:9400:29c1:df20::1/64 "E10"
+
+    section "IPv6 Routing (E11)"
+    check_route6_get 2001:4860:4860::8888 "via 2404:9400:29c1:df20::254" "E11" "IPv6 internet (via Internal Gateway)"
+
+    section "IPv6 Connectivity (E13)"
+    check_ping6 2404:9400:29c1:df20::254 "Internal Gateway" "E13"
+    check_ping6 2404:9400:29c1:df10::80  "Ubuntu Server"    "E13"
+    check_internet6 "E13"
+
+    # DNS client checks: this VM points at BIND9 on the Internal Gateway. Query the
+    # gateway's internal-side IPv6 address to confirm IPv6 DNS works end-to-end.
+    section "IPv6 DNS via Internal Gateway (E14/E15)"
+    if [ -n "$DOMAIN" ]; then
+        check_dns6_transport 2404:9400:29c1:df20::254 "$DOMAIN" "E14"
+        # ASSUMPTION: AAAA for www.<domain> -> 2404:9400:29c1:df10::80 is expected.
+        check_aaaa "www.$DOMAIN" 2404:9400:29c1:df20::254 "E15"
+    else
+        fail "E14" "Cannot test IPv6 DNS — domain not detected (resolve E7 first)"
+    fi
 }
 
 # =============================================================================

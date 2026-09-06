@@ -19,6 +19,15 @@
 #   E8 — Squid not running or not on port 8080
 #   E9 — Australian sites not blocked by Squid
 #
+#   --- IPv6 test layer (mirrors the IPv4 checks above) ---
+#   E13 — IPv6 address wrong or missing on an interface
+#   E14 — IPv6 route wrong or missing (route-get / default gateway)
+#   E15 — IPv6 forwarding disabled on a gateway
+#   E16 — IPv6 nftables rules wrong, missing, or not applied
+#   E17 — Cannot reach another VM over IPv6 (ping6)
+#   E18 — IPv6 service failing (Apache/Squid not on IPv6, or HTTPS over IPv6 fails)
+#   E19 — No IPv6 internet access
+#
 # Usage: sudo ./automark_activity2.1.sh
 # =============================================================================
 
@@ -405,6 +414,130 @@ check_custom_webpage() {
     fi
 }
 
+# ============================================================================
+#  SHARED IPv6 HELPER BLOCK  —  paste verbatim into each automarker, placed
+#  AFTER the existing helper/check functions and BEFORE the run_<vm>() funcs.
+#  These names are unique and won't clash with existing helpers. They reuse the
+#  script's existing pass()/fail()/section()/CYAN/NC.
+# ============================================================================
+
+# ---- IPv6 diagnostics ----
+diag_ip6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 addresses:${NC}"
+    ip -6 -br addr show 2>/dev/null | sed 's/^/                /'
+}
+diag_routes6() {
+    echo -e "         ${CYAN}[DIAG] Current IPv6 routes:${NC}"
+    ip -6 route show 2>/dev/null | sed 's/^/                /'
+    ip -6 route show table 51820 2>/dev/null | sed 's/^/                [t51820] /'
+}
+
+# ---- IPv6 addressing ----
+# check_ip6 <iface> <expected-cidr e.g. 2404:9400:29c1:df10::80/64> <code>
+check_ip6() {
+    local iface=$1 expected=$2 code=$3
+    if ip -6 addr show "$iface" 2>/dev/null | grep -qF "inet6 $expected"; then
+        pass "$iface = $expected"
+    else
+        local actual
+        actual=$(ip -6 addr show "$iface" 2>/dev/null | grep "inet6 " | grep -v "fe80" | awk '{print $2}' | tr '\n' ' ')
+        fail "$code" "$iface = $expected  (found: ${actual:-none})"
+        diag_ip6
+    fi
+}
+# check_ip6_has_global <iface> <code>   (for SLAAC/unknown addresses)
+check_ip6_has_global() {
+    local iface=$1 code=$2
+    if ip -6 addr show "$iface" scope global 2>/dev/null | grep -q "inet6 "; then
+        local a
+        a=$(ip -6 addr show "$iface" scope global 2>/dev/null | grep "inet6 " | awk '{print $2}' | tr '\n' ' ')
+        pass "$iface has a global IPv6 address ($a)"
+    else
+        fail "$code" "$iface has no global IPv6 address"; diag_ip6
+    fi
+}
+
+# ---- IPv6 routing (uses `ip -6 route get`, so it also sees wg-quick table 51820) ----
+# check_route6_get <dest> <expected-substr e.g. 'via 2404:...df10::254' or 'dev wg0'> <code> <label>
+check_route6_get() {
+    local dest=$1 expect=$2 code=$3 label=$4 out
+    out=$(ip -6 route get "$dest" 2>/dev/null)
+    if echo "$out" | grep -q "$expect"; then
+        pass "IPv6 route to $label — $expect"
+    else
+        fail "$code" "IPv6 route to $label not '$expect'  (got: ${out:-none})"; diag_routes6
+    fi
+}
+
+# ---- IPv6 forwarding ----
+check_ip6_forward() {
+    local code=$1 val
+    val=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
+    if [ "$val" = "1" ]; then pass "IPv6 forwarding enabled (net.ipv6.conf.all.forwarding = 1)"
+    else fail "$code" "IPv6 forwarding not enabled (value: ${val:-unreadable})"; fi
+}
+
+# ---- IPv6 connectivity ----
+check_ping6() {
+    local target=$1 label=$2 code=$3
+    if ping -6 -c 2 -W 2 "$target" &>/dev/null; then pass "Ping6 $label ($target)"
+    else fail "$code" "Cannot ping6 $label ($target)"; fi
+}
+check_internet6() {
+    local code=$1
+    if ping -6 -c 2 -W 3 2001:4860:4860::8888 &>/dev/null; then
+        pass "IPv6 internet reachable (ping 2001:4860:4860::8888)"; return; fi
+    local http
+    http=$(curl -6 -s -o /dev/null -w "%{http_code}" --max-time 8 -L https://www.google.com 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 internet reachable (HTTP $http over IPv6)"; return; fi
+    fail "$code" "No IPv6 internet access (ping6 + curl -6 both failed)"; diag_routes6
+}
+
+# ---- IPv6 service listener (checks something is bound on a v6 address:port) ----
+# check_listen6 <port> <label> <code>
+check_listen6() {
+    local port=$1 label=$2 code=$3 laddrs
+    laddrs=$(ss -H -ltn "( sport = :$port )" 2>/dev/null | awk '{print $4}')
+    # v6 listener shows as [::]:port, [::1]:port, [2404:...]:port, or *:port (dual-stack)
+    if echo "$laddrs" | grep -qE '^\[|^\*:'; then
+        pass "$label listening on IPv6 (port $port)"
+    else
+        fail "$code" "$label not listening on IPv6 (port $port) — found: ${laddrs:-none}"
+    fi
+}
+
+# ---- HTTP(S) over IPv6 (forces -6; use a literal [addr] or a AAAA name) ----
+# check_curl6 <url> <label> <code>   e.g. check_curl6 "https://[2404:...df10::80]/" "server" E13
+check_curl6() {
+    local url=$1 label=$2 code=$3 http
+    http=$(curl -6 -sk -o /dev/null -w "%{http_code}" --max-time 8 -L "$url" 2>/dev/null)
+    if [[ "$http" =~ ^[23] ]]; then pass "IPv6 HTTP $http from $label ($url)"
+    else fail "$code" "No IPv6 HTTP from $label ($url) — code: ${http:-none}"; fi
+}
+
+# ---- Generic nftables rule presence (family-agnostic; whitespace-normalised) ----
+# Accepts iif/iifname and oif/oifname by writing your regex with iif(name)? etc.
+# check_nft6 '<extended-regex>' '<pass message>' <code>
+check_nft6() {
+    local re=$1 msg=$2 code=$3 norm
+    norm=$(nft list ruleset 2>/dev/null | tr -s ' \t\n' ' ')
+    if echo "$norm" | grep -qE "$re"; then pass "$msg"
+    else
+        fail "$code" "missing nft rule: $msg"
+        echo -e "         ${CYAN}[DIAG] nft ruleset (head):${NC}"
+        nft list ruleset 2>/dev/null | sed 's/^/                /' | head -40
+    fi
+}
+
+# ---- DNS AAAA / reverse-v6 helpers (for the DNS/mail activities) ----
+# check_aaaa <name> <server-or-empty> <code>   (server may be @host or blank for system resolver)
+check_aaaa() {
+    local name=$1 server=$2 code=$3 out
+    out=$(dig +short ${server:+@$server} AAAA "$name" 2>/dev/null | grep -E ':' | head -1)
+    if [ -n "$out" ]; then pass "AAAA $name ${server:+via $server} -> $out"
+    else fail "$code" "no AAAA for $name ${server:+via $server}"; fi
+}
+
 # =============================================================================
 # Per-VM check suites
 # =============================================================================
@@ -440,6 +573,41 @@ run_external_gateway() {
     section "Part A — Web Server Reachable via DNAT (E11)"
     check_http           "http://192.168.1.80"  "Ubuntu Server HTTP"  "E11"
     check_https_insecure "https://192.168.1.80" "Ubuntu Server HTTPS" "E11"
+
+    # =========================================================================
+    # IPv6 test layer — mirrors the IPv4 checks above (External Gateway)
+    # =========================================================================
+
+    section "IPv6 Addressing (E13)"
+    # ASSUMPTION: External Gateway holds the transit-side v6 on wg0 and the DMZ-side v6 on eth1.
+    check_ip6 wg0  "2404:9400:29c1:df00::1/64"   "E13"   # ASSUMPTION: wg0 v6 /64 (transit)
+    check_ip6 eth1 "2404:9400:29c1:df10::254/64" "E13"   # ASSUMPTION: eth1 v6 /64 (DMZ)
+
+    section "IPv6 Forwarding (E15)"
+    check_ip6_forward "E15"
+
+    section "IPv6 Routing (E14)"
+    check_route6_get "2001:4860:4860::8888"    "dev wg0"                    "E14" "internet (via wg0 tunnel)"
+    check_route6_get "2404:9400:29c1:df20::1"  "via 2404:9400:29c1:df10::1" "E14" "internal (Desktop via IntGW)"
+
+    section "IPv6 nftables — Inbound Web Forward (E16)"
+    # IPv4 uses table ip nat DNAT (80/443 -> 192.168.1.80) plus an inet-filter forward accept.
+    # For IPv6 native routing there is typically no DNAT: mirror the forward-accept path instead.
+    check_nft6 'iif(name)? "eth0" oif(name)? "eth1" tcp dport [{] 80, 443 [}] ct state new accept' \
+        "IPv6/inet forward accept: eth0 -> eth1 web (80,443) to server" "E16"
+    check_nft6 'iif(name)? "eth1" oif(name)? "eth0" accept' \
+        "IPv6/inet forward accept: eth1 -> eth0 (DMZ to internet)" "E16"
+
+    section "IPv6 Connectivity (E17)"
+    check_ping6 "2404:9400:29c1:df10::1"  "Internal Gateway (DMZ side)" "E17"
+    check_ping6 "2404:9400:29c1:df10::80" "Ubuntu Server"               "E17"
+    check_ping6 "2404:9400:29c1:df20::1"  "Ubuntu Desktop"              "E17"
+
+    section "IPv6 Service — Web Server Reachable over IPv6 (E18)"
+    check_curl6 "https://[2404:9400:29c1:df10::80]/" "Ubuntu Server HTTPS (via ExtGW)" "E18"
+
+    section "IPv6 Internet Access (E19)"
+    check_internet6 "E19"
 }
 
 run_internal_gateway() {
@@ -467,6 +635,31 @@ run_internal_gateway() {
     check_ping "192.168.1.80"  "Ubuntu Server"    "E5"
     check_ping "10.10.1.1"    "Ubuntu Desktop"    "E5"
     check_internet "E5"
+
+    # =========================================================================
+    # IPv6 test layer — mirrors the IPv4 checks above (Internal Gateway)
+    # =========================================================================
+
+    section "IPv6 Addressing (E13)"
+    check_ip6 eth0 "2404:9400:29c1:df10::1/64"   "E13"   # DMZ side
+    check_ip6 eth1 "2404:9400:29c1:df20::254/64" "E13"   # internal side
+
+    section "IPv6 Forwarding (E15)"
+    check_ip6_forward "E15"
+
+    section "IPv6 Routing (E14)"
+    check_route6_get "2001:4860:4860::8888" "via 2404:9400:29c1:df10::254" "E14" "internet (via ExtGW)"
+
+    section "IPv6 Service — Squid on IPv6 (E18)"
+    check_listen6 8080 "Squid" "E18"
+
+    section "IPv6 Connectivity (E17)"
+    check_ping6 "2404:9400:29c1:df10::254" "External Gateway" "E17"
+    check_ping6 "2404:9400:29c1:df10::80"  "Ubuntu Server"    "E17"
+    check_ping6 "2404:9400:29c1:df20::1"   "Ubuntu Desktop"   "E17"
+
+    section "IPv6 Internet Access (E19)"
+    check_internet6 "E19"
 }
 
 run_ubuntu_server() {
@@ -499,6 +692,30 @@ run_ubuntu_server() {
     check_ping "192.168.1.254" "External Gateway"            "E5"
     check_ping "192.168.1.1"   "Internal Gateway (DMZ side)" "E5"
     check_internet "E5"
+
+    # =========================================================================
+    # IPv6 test layer — mirrors the IPv4 checks above (Ubuntu Server)
+    # =========================================================================
+
+    section "IPv6 Addressing (E13)"
+    check_ip6 eth0 "2404:9400:29c1:df10::80/64" "E13"
+
+    section "IPv6 Routing (E14)"
+    check_route6_get "2001:4860:4860::8888"   "via 2404:9400:29c1:df10::254" "E14" "internet (default via ExtGW)"
+    # Mirror of the IPv4 static route 10.10.1.0/24 via 192.168.1.1:
+    check_route6_get "2404:9400:29c1:df20::1" "via 2404:9400:29c1:df10::1"   "E14" "internal /64 (via IntGW)"
+
+    section "IPv6 Service — Apache on IPv6 (E18)"
+    check_listen6 80  "Apache HTTP"  "E18"
+    check_listen6 443 "Apache HTTPS" "E18"
+    check_curl6 "https://[2404:9400:29c1:df10::80]/" "Apache HTTPS (local IPv6)" "E18"
+
+    section "IPv6 Connectivity (E17)"
+    check_ping6 "2404:9400:29c1:df10::254" "External Gateway"            "E17"
+    check_ping6 "2404:9400:29c1:df10::1"   "Internal Gateway (DMZ side)" "E17"
+
+    section "IPv6 Internet Access (E19)"
+    check_internet6 "E19"
 }
 
 run_ubuntu_desktop() {
@@ -531,6 +748,38 @@ run_ubuntu_desktop() {
     check_ping "10.10.1.254" "Internal Gateway" "E5"
     check_ping "192.168.1.80" "Ubuntu Server"   "E5"
     check_internet "E5"
+
+    # =========================================================================
+    # IPv6 test layer — mirrors the IPv4 checks above (Ubuntu Desktop)
+    # =========================================================================
+
+    section "IPv6 Addressing (E13)"
+    check_ip6 eth0 "2404:9400:29c1:df20::1/64" "E13"
+
+    section "IPv6 Routing (E14)"
+    check_route6_get "2001:4860:4860::8888" "via 2404:9400:29c1:df20::254" "E14" "internet (default via IntGW)"
+
+    section "IPv6 Service — Web Server Access over IPv6 (E18)"
+    check_curl6 "https://[2404:9400:29c1:df10::80]/" "Ubuntu Server HTTPS (direct, IPv6)" "E18"
+
+    section "IPv6 Service — Web Access via Squid over IPv6 (E18)"
+    # ASSUMPTION: Squid also serves the internal /64 gateway address over IPv6 on 8080.
+    local proxy6_code
+    proxy6_code=$(curl -6 -s -o /dev/null -w "%{http_code}" --max-time 8 \
+        --proxy "http://[2404:9400:29c1:df20::254]:8080" "http://[2404:9400:29c1:df10::80]/" 2>/dev/null)
+    if [[ "$proxy6_code" =~ ^[2345] ]]; then
+        pass "HTTP $proxy6_code — Squid proxy handling requests over IPv6"
+    else
+        fail "E18" "No response from Squid proxy over IPv6 (HTTP code: ${proxy6_code:-no response})"
+        info "ASSUMPTION: verify Squid listens on the IntGW IPv6 [2404:9400:29c1:df20::254]:8080"
+    fi
+
+    section "IPv6 Connectivity (E17)"
+    check_ping6 "2404:9400:29c1:df20::254" "Internal Gateway" "E17"
+    check_ping6 "2404:9400:29c1:df10::80"  "Ubuntu Server"    "E17"
+
+    section "IPv6 Internet Access (E19)"
+    check_internet6 "E19"
 }
 
 # =============================================================================
