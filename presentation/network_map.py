@@ -7,14 +7,16 @@ lab-view.zsh calls:  python3 network_map.py <COLS> <ROWS> <ACTIVITY>
 
 HOW TO ADD A PER-WEEK MAP
 -------------------------
-1. Paste that week's diagram as a raw string (like MAP_DMZ below).
+1. Paste that week's diagram as a raw string (like MAP_1 below).
 2. Register it:      MAPS["2.2"] = MAP_DNS
-3. Colour overlay:   by default every activity reuses draw_dmz() (the bespoke
-   overlay whose coordinates match MAP_DMZ). When you give an activity a DIFFERENT
-   map, its coordinates won't match draw_dmz — so also point it at the generic
-   auto-colouriser (borders white, IPv4 violet, IPv6 blue):
-       DRAWS["2.2"] = draw_generic
-   ...or write a bespoke draw_<activity>(cv) and register that instead.
+3. Colour overlay (COMPOSABLE): OVERLAYS[act] is a LIST of draw functions applied
+   in order, baseline first and additions on top (the Canvas is last-write-wins).
+   - reuse an existing layout:  OVERLAYS["2.2"] = [draw_dmz]
+   - generic baseline only:     OVERLAYS["2.2"] = [draw_generic]
+   - generic + your additions:  OVERLAYS["2.2"] = [draw_generic, draw_myweek]
+     where draw_myweek(cv) adds fill()/ink()/box_draw() calls that OVERRIDE the
+     baseline only where needed (see draw_vpn for a worked example: Activity 4.2
+     = draw_generic + zone/box background fills).
 
 Canvas helpers (0-indexed, inclusive):
     cv.fill(r0,r1,c0,c1,colour)              rectangle background
@@ -396,6 +398,43 @@ def draw_generic(cv):
         for m in _IP4_RE.finditer(ln):
             cv.ink(r, r, m.start(), m.end() - 1, "violet")
 
+# ---- Additions layered ON TOP of draw_generic (Activity 4.2) ----------------
+# Because the Canvas is last-write-wins, running draw_generic first (borders
+# white, IPs coloured) and then this second overlay of background fills gives
+# the coloured zones/boxes while the generic baseline's foreground shows through.
+# Only fill() (background) is used here, so it never clobbers the IP/border
+# colours generic already set. To OVERRIDE a colour, just add a later fill()/
+# ink() for that region — the last call wins.
+def draw_vpn(cv):
+    # zone bands (same columns as the shared layout)
+    cv.fill(0, 37,   0, 105, "zone_ext")
+    cv.fill(0, 19,  51, 106, "zone_dmz"); cv.fill(20, 37, 79, 133, "zone_dmz")
+    cv.fill(0, 19, 107, 187, "zone_int")
+    cv.fill(20, 37, 134, 187, "dark_grey")
+    # host boxes (background only)
+    cv.fill( 3, 18,  28,  76, "medred")    # External Gateway
+    cv.fill( 3, 18,  82, 130, "dorange")   # Internal Gateway
+    cv.fill( 3, 18, 136, 184, "dgreen")    # Desktop
+    cv.fill(21, 36,  28,  76, "red")       # Remote Gateway
+    cv.fill(21, 36,  82, 130, "ltyellow")  # Server
+    cv.fill( 3, 26,   5,  22, "black")     # Internet (shortened in the 4.2 map)
+    cv.fill(28, 36,   5,  22, "grey")      # VPN Client(s) — the new box
+    # inner tunnel boxes (same coords as the DMZ layout)
+    cv.fill( 9, 13,  43,  71, "ltred")     # EGW wg0
+    cv.fill(15, 17,  57,  70, "ltred")     # EGW wstunnel
+    cv.fill(27, 31,  30,  60, "ltred")     # RGW wg0
+    cv.fill(33, 35,  58,  71, "ltred")     # RGW wstunnel
+    # legend panel + zone/host swatches
+    cv.fill(21, 36, 136, 185, "grey")
+    cv.fill(24, 24, 139, 146, "black");   cv.fill(25, 25, 139, 151, "zone_ext")
+    cv.fill(26, 26, 139, 156, "zone_dmz");cv.fill(27, 27, 139, 151, "zone_int")
+    cv.fill(24, 24, 170, 183, "red");     cv.fill(25, 25, 168, 183, "medred")
+    cv.fill(26, 26, 168, 183, "dorange"); cv.fill(27, 27, 178, 183, "ltyellow")
+    cv.fill(28, 28, 177, 183, "dgreen")
+    # route-legend sample lines (foreground, matching the protocol colours)
+    cv.ink(32, 32, 144, 158, "violet"); cv.ink(33, 33, 144, 158, "blue")
+    cv.ink(35, 35, 144, 158, "cyan")
+
 # =============================================================================
 #  REGISTRY  —  which map + overlay each activity uses.
 #  All activities currently reuse the DMZ map + bespoke overlay. When you paste
@@ -410,17 +449,28 @@ MAPS = {
     "4.1": MAP_4_1,
     "4.2": MAP_4_2,
 }
-# Activities 1/2.1/2.2/3/4.1 share the DMZ box/route layout (only extra service
-# labels inside boxes) -> the bespoke draw_dmz overlay lines up. Activity 4.2
-# changes the geometry (VPN client box + tun0), so it uses the generic colouriser.
-DRAWS = { "4.2": draw_generic }            # per-activity overlay overrides; default = draw_dmz
-
-def _map_for(activity):   return MAPS.get(activity, MAP_1)
-def _draw_for(activity):  return DRAWS.get(activity, draw_dmz)
+# OVERLAYS: each activity maps to a LIST of draw functions, applied in order
+# (baseline first, additions on top; last write wins). Activities 1/2.1/2.2/3/4.1
+# share the DMZ box/route layout (only extra service labels), so the single
+# bespoke draw_dmz overlay lines up. Activity 4.2 changes the geometry, so it
+# COMPOSES: draw_generic as the baseline + draw_vpn additions on top.
+# To add a per-week map: register [draw_generic] (baseline only), then grow it
+# to [draw_generic, draw_myweek] and add fills/inks in draw_myweek as needed.
+OVERLAYS = {
+    "1":   [draw_dmz],
+    "2.1": [draw_dmz],
+    "2.2": [draw_dmz],
+    "3":   [draw_dmz],
+    "4.1": [draw_dmz],
+    "4.2": [draw_generic, draw_vpn],
+}
+def _map_for(activity):      return MAPS.get(activity, MAP_1)
+def _overlays_for(activity): return OVERLAYS.get(activity, [draw_generic])
 
 # =============================================================================
-def to_ansi(map_lines, draw_fn):
-    cv = Canvas(map_lines); draw_fn(cv)
+def to_ansi(map_lines, overlays):
+    cv = Canvas(map_lines)
+    for fn in overlays: fn(cv)
     width = cv.width
     out = []
     for r, line in enumerate(map_lines):
@@ -447,7 +497,7 @@ def _term_size():
 def render(activity):
     cols, rows = _term_size()
     map_lines = _map_for(activity).strip("\n").split("\n")
-    body, width = to_ansi(map_lines, _draw_for(activity))
+    body, width = to_ansi(map_lines, _overlays_for(activity))
     pad = " " * max(0, (cols - width) // 2)
     top = max(0, (rows - len(body)) // 2)
     return "\n".join([""] * top + [pad + line for line in body])
