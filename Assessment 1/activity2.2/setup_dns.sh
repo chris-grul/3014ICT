@@ -50,23 +50,29 @@ fi
 
 echo -e "[2/6] Configuring named.conf.options..."
 cat > /etc/bind/named.conf.options << 'EOF'
+# Quad9 DNS-over-TLS profile (top-level; must precede the forwarders that use it)
+tls quad9-dot {
+    ca-file "/etc/ssl/certs/ca-certificates.crt";
+    remote-hostname "dns.quad9.net";
+};
+
 options {
     directory "/var/cache/bind";
 
-    allow-query {
-        127.0.0.1; ::1;
-        192.168.1.0/24; 10.10.1.0/24;
-        2404:9400:29c1:df10::/64; 2404:9400:29c1:df20::/64;
-    };
+    allow-query { 127.0.0.1; 192.168.1.0/24; 10.10.1.0/24; ::1; 2404:9400:29c1:df00::/56; };
 
+    # Forward via Quad9 DNS-over-TLS (port 853). DoT is TCP, so it works
+    # through the Azure lab's outbound-UDP block (no separate tcp-only needed).
     forwarders {
-        8.8.8.8;
-        8.8.4.4;
+        9.9.9.9 port 853 tls quad9-dot;
+        149.112.112.112 port 853 tls quad9-dot;
+        2620:fe::f port 853 tls quad9-dot;
+        2620:fe::9 port 853 tls quad9-dot;
     };
 
     forward only;
 
-    dnssec-validation yes;
+    dnssec-validation auto;
 
     listen-on { 127.0.0.1; 192.168.1.1; 10.10.1.254; };
     listen-on-v6 { ::1; 2404:9400:29c1:df10::1; 2404:9400:29c1:df20::254; };
@@ -90,7 +96,7 @@ zone "1.168.192.in-addr.arpa" {
 
 zone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" {
     type master;
-    file "/etc/bind/zones/db.df10.ip6";
+    file "/etc/bind/zones/db.2404.9400.29c1.df10";
 };
 EOF
 echo -e "      ${GREEN}[DONE]${NC} Zone definitions created"
@@ -146,7 +152,7 @@ EOF
 echo -e "      ${GREEN}[DONE]${NC} Reverse zone file created"
 
 echo -e "[5b/6] Creating IPv6 reverse zone file (df10::/64)..."
-cat > /etc/bind/zones/db.df10.ip6 << EOF
+cat > /etc/bind/zones/db.2404.9400.29c1.df10 << EOF
 ;
 ; BIND IPv6 reverse zone for 2404:9400:29c1:df10::/64
 ;
@@ -185,10 +191,10 @@ if [ $? -ne 0 ]; then
     named-checkzone "1.168.192.in-addr.arpa" /etc/bind/zones/db.192.168.1; exit 1
 fi
 
-named-checkzone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" /etc/bind/zones/db.df10.ip6 > /dev/null 2>&1
+named-checkzone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" /etc/bind/zones/db.2404.9400.29c1.df10 > /dev/null 2>&1
 if [ $? -ne 0 ]; then
     echo -e "      ${RED}[FAIL]${NC} IPv6 reverse zone file has errors:"
-    named-checkzone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" /etc/bind/zones/db.df10.ip6; exit 1
+    named-checkzone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" /etc/bind/zones/db.2404.9400.29c1.df10; exit 1
 fi
 
 systemctl enable named > /dev/null 2>&1

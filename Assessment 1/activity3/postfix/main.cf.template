@@ -13,7 +13,8 @@ myorigin = $mydomain
 # Listen on all interfaces so the server accepts mail from the network
 # (without this, Postfix only accepts local connections)
 inet_interfaces = all
-inet_protocols = ipv4
+# Dual-stack in this lab (the deployed server listens on IPv4 + IPv6)
+inet_protocols = all
 
 # — Local delivery ————————————————————————————————————————————————————————————
 # Only hostname and localhost here — the domain is handled by virtual_alias_maps
@@ -24,7 +25,7 @@ mydestination = $myhostname, localhost.localdomain, localhost, DOMAIN
 # Hosts in these networks can send mail without authentication
 # This is why Thunderbird works without SMTP auth in this lab —
 # the Desktop (10.10.1.0/24) is in a trusted subnet
-mynetworks = 127.0.0.0/8, 192.168.1.0/24, 10.10.1.0/24
+mynetworks = 127.0.0.0/8, 192.168.1.0/24, 10.10.1.0/24, [::1]/128, [2404:9400:29c1:df00::]/56
 
 # — Mailbox format ————————————————————————————————————————————————————————————
 # Deliver to Maildir format — each message is a separate file under ~/Maildir/

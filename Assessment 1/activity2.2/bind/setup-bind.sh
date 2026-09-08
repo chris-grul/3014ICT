@@ -42,14 +42,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[4/8] Downloading required files from GitHub..."
+echo "[4/7] Downloading required files from GitHub..."
 FILES=(
+  "named.conf"
   "named.conf.options"
   "named.conf.local"
+  "db.chrisgrul-3014ict.com"
   "db.3014ict.chris.grul.me"
   "db.192.168.1"
-  "db.df10.ip6"
-  "named.conf.append"
+  "db.2404.9400.29c1.df10"
 )
 
 for f in "${FILES[@]}"; do
@@ -57,28 +58,26 @@ for f in "${FILES[@]}"; do
   curl -fsSL "$REPO/$f" -o "$TMPDIR/$f"
 done
 
-echo "[5/8] Installing configuration files..."
+echo "[5/7] Installing configuration files..."
 sudo mkdir -p /etc/bind/zones
 
-sudo install -m 644 "$TMPDIR/named.conf.options"          /etc/bind/named.conf.options
-sudo install -m 644 "$TMPDIR/named.conf.local"           /etc/bind/named.conf.local
-sudo install -m 644 "$TMPDIR/db.3014ict.chris.grul.me"   /etc/bind/zones/db.3014ict.chris.grul.me
-sudo install -m 644 "$TMPDIR/db.192.168.1"               /etc/bind/zones/db.192.168.1
-sudo install -m 644 "$TMPDIR/db.df10.ip6"                /etc/bind/zones/db.df10.ip6
+sudo install -m 644 "$TMPDIR/named.conf"                    /etc/bind/named.conf
+sudo install -m 644 "$TMPDIR/named.conf.options"            /etc/bind/named.conf.options
+sudo install -m 644 "$TMPDIR/named.conf.local"             /etc/bind/named.conf.local
+sudo install -m 644 "$TMPDIR/db.chrisgrul-3014ict.com"     /etc/bind/zones/db.chrisgrul-3014ict.com
+sudo install -m 644 "$TMPDIR/db.3014ict.chris.grul.me"     /etc/bind/zones/db.3014ict.chris.grul.me
+sudo install -m 644 "$TMPDIR/db.192.168.1"                 /etc/bind/zones/db.192.168.1
+sudo install -m 644 "$TMPDIR/db.2404.9400.29c1.df10"       /etc/bind/zones/db.2404.9400.29c1.df10
 
-echo "[6/8] Adding TCP-only upstream blocks if not already present..."
-if grep -q 'tcp-only yes' /etc/bind/named.conf 2>/dev/null; then
-  echo "  TCP-only upstream block already present. Skipping append."
-else
-  sudo tee -a /etc/bind/named.conf > /dev/null < "$TMPDIR/named.conf.append"
-  echo "  TCP-only upstream block appended to /etc/bind/named.conf"
-fi
+# NOTE: forwarding uses Quad9 DNS-over-TLS (port 853) configured inline in
+# named.conf.options — the old "tcp-only" append block is no longer needed
+# (DoT is TCP, which is what makes forwarding work through Azure's UDP block).
 
-echo "[7/8] Enabling and starting named..."
+echo "[6/7] Enabling and starting named..."
 sudo systemctl enable named >/dev/null
 sudo systemctl start named
 
-echo "[8/8] Showing current service state..."
+echo "[7/7] Showing current service state..."
 sudo systemctl --no-pager --full status named | sed -n '1,12p' || true
 
 echo ""
@@ -89,12 +88,14 @@ echo "============================================================"
 echo ""
 echo " STEP 1 — Validate the BIND configuration and all zones:"
 echo "   sudo named-checkconf"
+echo "   sudo named-checkzone chrisgrul-3014ict.com \\"
+echo "        /etc/bind/zones/db.chrisgrul-3014ict.com"
 echo "   sudo named-checkzone ${LAB_DOMAIN} \\"
 echo "        /etc/bind/zones/db.3014ict.chris.grul.me"
 echo "   sudo named-checkzone 1.168.192.in-addr.arpa \\"
 echo "        /etc/bind/zones/db.192.168.1"
 echo "   sudo named-checkzone 0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa \\"
-echo "        /etc/bind/zones/db.df10.ip6"
+echo "        /etc/bind/zones/db.2404.9400.29c1.df10"
 echo ""
 echo " STEP 2 — Restart named:"
 echo "   sudo systemctl restart named"

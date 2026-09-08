@@ -1,0 +1,10 @@
+# =============================================================================
+# Postfix virtual alias map — Activity 3 Template
+# 7015ICT | Griffith University
+# YOUR3014ict.chris.grul.me is replaced by setup-postfix.sh during installation
+# =============================================================================
+# Format: email-address    local-system-username
+# After editing, always run: sudo postmap /etc/postfix/virtual
+
+desktop-user@3014ict.chris.grul.me    user1
+server-user@3014ict.chris.grul.me     user2

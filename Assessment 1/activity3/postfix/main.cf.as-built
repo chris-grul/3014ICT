@@ -1,0 +1,26 @@
+# Postfix — Server (srv) | 3014ICT Assessment 1 — AS-BUILT (postconf -n)
+# Effective non-default settings on the deployed mail server.
+# NOTE: outbound relays via Resend (smtp.resend.com:587). The SASL
+#       credential lives in /etc/postfix/sasl_passwd on the box and is
+#       deliberately NOT in this repo or the backup.
+# ------------------------------------------------------------------
+home_mailbox = Maildir/
+inet_interfaces = all
+inet_protocols = all
+mailbox_transport = lmtp:unix:private/dovecot-lmtp
+mydestination = $myhostname, localhost.localdomain, localhost, 3014ict.chris.grul.me
+mydomain = 3014ict.chris.grul.me
+myhostname = mail.3014ict.chris.grul.me
+mynetworks = 127.0.0.0/8, 192.168.1.0/24, 10.10.1.0/24, [::1]/128, [2404:9400:29c1:df00::]/56
+myorigin = $mydomain
+relayhost = [smtp.resend.com]:587
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+smtp_sasl_security_options = noanonymous
+smtp_tls_security_level = encrypt
+smtp_tls_wrappermode = no
+smtp_use_tls = yes
+smtpd_banner = $myhostname ESMTP
+smtpd_peername_lookup = no
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+virtual_alias_maps = hash:/etc/postfix/virtual

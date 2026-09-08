@@ -1,0 +1,68 @@
+# Dovecot — Server (srv) | 3014ICT Assessment 1 — AS-BUILT (doveconf -n)
+# Effective config on the deployed mail server (secret material hidden).
+# ------------------------------------------------------------------
+# 2.3.21 (47349e2482): /etc/dovecot/dovecot.conf
+# Pigeonhole version 0.5.21 (f6cd4b8e)
+# OS: Linux 6.8.0-136-generic x86_64 Ubuntu 24.04.4 LTS 
+# Hostname: server
+auth_mechanisms = plain login
+auth_username_format = %n
+disable_plaintext_auth = no
+mail_location = maildir:~/Maildir
+mail_privileged_group = mail
+namespace inbox {
+  inbox = yes
+  location = 
+  mailbox Drafts {
+    special_use = \Drafts
+  }
+  mailbox Junk {
+    special_use = \Junk
+  }
+  mailbox Sent {
+    special_use = \Sent
+  }
+  mailbox "Sent Messages" {
+    special_use = \Sent
+  }
+  mailbox Trash {
+    special_use = \Trash
+  }
+  prefix = 
+}
+passdb {
+  driver = pam
+}
+protocols = imap pop3 lmtp
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    group = postfix
+    mode = 0666
+    user = postfix
+  }
+  unix_listener auth-userdb {
+    mode = 0600
+    user = dovecot
+  }
+  user = $default_internal_user
+}
+service imap-login {
+  inet_listener imap {
+    port = 143
+  }
+}
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    group = postfix
+    mode = 0600
+    user = postfix
+  }
+}
+ssl = no
+ssl_cert = </etc/dovecot/private/dovecot.pem
+ssl_client_ca_dir = /etc/ssl/certs
+ssl_dh = # hidden, use -P to show it
+ssl_key = # hidden, use -P to show it
+userdb {
+  driver = passwd
+}
