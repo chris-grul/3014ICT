@@ -1,0 +1,20 @@
+; IPv6 reverse zone for 2404:9400:29c1:df10::/64 (DMZ GUA) — 3014ict.chris.grul.me
+; Zone: 0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa
+; Host nibbles below are the reversed low 64 bits of each address.
+;
+$TTL    604800
+@       IN      SOA     ns1.3014ict.chris.grul.me. admin.3014ict.chris.grul.me. (
+                              1         ; Serial
+                         604800         ; Refresh
+                          86400         ; Retry
+                        2419200         ; Expire
+                         604800 )       ; Negative Cache TTL
+;
+@       IN      NS      ns1.3014ict.chris.grul.me.
+
+; ::1   -> ns1  (Internal Gateway)
+1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0   IN   PTR   ns1.3014ict.chris.grul.me.
+; ::80  -> www  (Server)
+0.8.0.0.0.0.0.0.0.0.0.0.0.0.0.0   IN   PTR   www.3014ict.chris.grul.me.
+; ::254 -> gateway (External Gateway, DMZ-facing)
+4.5.2.0.0.0.0.0.0.0.0.0.0.0.0.0   IN   PTR   gateway.3014ict.chris.grul.me.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Activity 2.2 - BIND9 DNS Setup Script
-# 3821ICT | Griffith University
+# 3014ICT | Griffith University
 # =============================================================================
 # Run this on the Internal Gateway after completing Activity 1.
 # Usage: sudo bash setup_dns.sh
@@ -21,11 +21,13 @@ fi
 
 echo ""
 echo -e "${BOLD}=== Activity 2.2 — BIND9 DNS Setup ===${NC}"
-echo -e "${BOLD}3821ICT | Griffith University${NC}"
+echo -e "${BOLD}3014ICT | Griffith University${NC}"
 echo ""
 
-echo -e "${CYAN}Enter your domain name (e.g. johnsmith3821ict.com):${NC}"
+DEFAULT_DOMAIN="3014ict.chris.grul.me"
+echo -e "${CYAN}Enter your domain name [default: ${DEFAULT_DOMAIN}]:${NC}"
 read -r DOMAIN
+DOMAIN="${DOMAIN:-$DEFAULT_DOMAIN}"
 
 if [ -z "$DOMAIN" ]; then
     echo -e "${RED}[ERROR]${NC} Domain name cannot be empty."
@@ -51,6 +53,12 @@ cat > /etc/bind/named.conf.options << 'EOF'
 options {
     directory "/var/cache/bind";
 
+    allow-query {
+        127.0.0.1; ::1;
+        192.168.1.0/24; 10.10.1.0/24;
+        2404:9400:29c1:df10::/64; 2404:9400:29c1:df20::/64;
+    };
+
     forwarders {
         8.8.8.8;
         8.8.4.4;
@@ -61,7 +69,7 @@ options {
     dnssec-validation yes;
 
     listen-on { 127.0.0.1; 192.168.1.1; 10.10.1.254; };
-    listen-on-v6 { none; };
+    listen-on-v6 { ::1; 2404:9400:29c1:df10::1; 2404:9400:29c1:df20::254; };
 };
 EOF
 echo -e "      ${GREEN}[DONE]${NC} named.conf.options configured"
@@ -78,6 +86,11 @@ zone "$DOMAIN" {
 zone "1.168.192.in-addr.arpa" {
     type master;
     file "/etc/bind/zones/db.192.168.1";
+};
+
+zone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" {
+    type master;
+    file "/etc/bind/zones/db.df10.ip6";
 };
 EOF
 echo -e "      ${GREEN}[DONE]${NC} Zone definitions created"
@@ -96,11 +109,18 @@ cat > /etc/bind/zones/db.$DOMAIN << EOF
              604800 )       ; Negative Cache TTL
 ;
 @     IN  NS   ns1.$DOMAIN.
+@     IN  MX   10 mail.$DOMAIN.
 
 ns1   IN  A    192.168.1.1
+ns1   IN  AAAA 2404:9400:29c1:df10::1
 @     IN  A    192.168.1.80
+@     IN  AAAA 2404:9400:29c1:df10::80
 www   IN  A    192.168.1.80
+www   IN  AAAA 2404:9400:29c1:df10::80
 mail  IN  A    192.168.1.80
+mail  IN  AAAA 2404:9400:29c1:df10::80
+gateway IN A   192.168.1.254
+gateway IN AAAA 2404:9400:29c1:df10::254
 EOF
 echo -e "      ${GREEN}[DONE]${NC} Forward zone file created: /etc/bind/db.$DOMAIN"
 
@@ -125,6 +145,27 @@ cat > /etc/bind/zones/db.192.168.1 << EOF
 EOF
 echo -e "      ${GREEN}[DONE]${NC} Reverse zone file created"
 
+echo -e "[5b/6] Creating IPv6 reverse zone file (df10::/64)..."
+cat > /etc/bind/zones/db.df10.ip6 << EOF
+;
+; BIND IPv6 reverse zone for 2404:9400:29c1:df10::/64
+;
+\$TTL 604800
+@ IN SOA ns1.$DOMAIN. admin.$DOMAIN. (
+                  1         ; Serial
+             604800         ; Refresh
+              86400         ; Retry
+            2419200         ; Expire
+             604800 )       ; Negative Cache TTL
+;
+@ IN NS ns1.$DOMAIN.
+
+1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0   IN PTR ns1.$DOMAIN.
+0.8.0.0.0.0.0.0.0.0.0.0.0.0.0.0   IN PTR www.$DOMAIN.
+4.5.2.0.0.0.0.0.0.0.0.0.0.0.0.0   IN PTR gateway.$DOMAIN.
+EOF
+echo -e "      ${GREEN}[DONE]${NC} IPv6 reverse zone file created"
+
 echo -e "[6/6] Validating and restarting BIND9..."
 
 named-checkconf 2>/tmp/bind_err
@@ -142,6 +183,12 @@ named-checkzone "1.168.192.in-addr.arpa" /etc/bind/zones/db.192.168.1 > /dev/nul
 if [ $? -ne 0 ]; then
     echo -e "      ${RED}[FAIL]${NC} Reverse zone file has errors:"
     named-checkzone "1.168.192.in-addr.arpa" /etc/bind/zones/db.192.168.1; exit 1
+fi
+
+named-checkzone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" /etc/bind/zones/db.df10.ip6 > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo -e "      ${RED}[FAIL]${NC} IPv6 reverse zone file has errors:"
+    named-checkzone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" /etc/bind/zones/db.df10.ip6; exit 1
 fi
 
 systemctl enable named > /dev/null 2>&1
@@ -166,6 +213,10 @@ echo ""
 echo -e "${YELLOW}Next steps:${NC}"
 echo "  1. Set DNS to 192.168.1.1 on Ubuntu Server (netplan)"
 echo "  2. Set DNS to 10.10.1.254 on Ubuntu Desktop (network settings)"
-echo "  3. Test from Internal Gateway: dig @127.0.0.1 www.$DOMAIN"
+echo "  3. Test from Internal Gateway:"
+echo "       dig +short @127.0.0.1 www.$DOMAIN"
+echo "       dig +short @127.0.0.1 AAAA www.$DOMAIN"
+echo "       dig +short @127.0.0.1 $DOMAIN MX"
+echo "       dig +short @127.0.0.1 -x 2404:9400:29c1:df10::80"
 echo "  4. Open http://www.$DOMAIN and https://www.$DOMAIN in Firefox on Desktop"
 echo ""

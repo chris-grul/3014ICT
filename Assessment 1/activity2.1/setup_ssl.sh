@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Activity 2 - SSL Config Setup
-# 3821ICT | Griffith University
+# 3014ICT | Griffith University
 # =============================================================================
 
 BASE_URL="https://raw.githubusercontent.com/7015ICT/SOC-Activities-Project-Griffith/main/activity2.1"

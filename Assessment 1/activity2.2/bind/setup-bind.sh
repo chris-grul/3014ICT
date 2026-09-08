@@ -12,7 +12,11 @@
 
 set -euo pipefail
 
-REPO="https://raw.githubusercontent.com/7015ICT/SOC-Activities-Project-Griffith/main/activity2.2/bind"
+# Fetch the as-built zone/config files from this repo. Assumes the
+# "Assessment 1" tree has been merged to main; change the branch segment if
+# you are pulling from a feature branch. LAB_DOMAIN drives the follow-up hints.
+LAB_DOMAIN="3014ict.chris.grul.me"
+REPO="https://raw.githubusercontent.com/chris-grul/3014ICT/main/Assessment%201/activity2.2/bind"
 
 echo "============================================================"
 echo " Activity 2 - BIND9 Setup (Internal Gateway)"
@@ -42,8 +46,9 @@ echo "[4/8] Downloading required files from GitHub..."
 FILES=(
   "named.conf.options"
   "named.conf.local"
-  "db.YOURDOMAIN.com"
+  "db.3014ict.chris.grul.me"
   "db.192.168.1"
+  "db.df10.ip6"
   "named.conf.append"
 )
 
@@ -55,10 +60,11 @@ done
 echo "[5/8] Installing configuration files..."
 sudo mkdir -p /etc/bind/zones
 
-sudo install -m 644 "$TMPDIR/named.conf.options" /etc/bind/named.conf.options
-sudo install -m 644 "$TMPDIR/named.conf.local"   /etc/bind/named.conf.local
-sudo install -m 644 "$TMPDIR/db.YOURDOMAIN.com"  /etc/bind/zones/db.YOURDOMAIN.com
-sudo install -m 644 "$TMPDIR/db.192.168.1"       /etc/bind/zones/db.192.168.1
+sudo install -m 644 "$TMPDIR/named.conf.options"          /etc/bind/named.conf.options
+sudo install -m 644 "$TMPDIR/named.conf.local"           /etc/bind/named.conf.local
+sudo install -m 644 "$TMPDIR/db.3014ict.chris.grul.me"   /etc/bind/zones/db.3014ict.chris.grul.me
+sudo install -m 644 "$TMPDIR/db.192.168.1"               /etc/bind/zones/db.192.168.1
+sudo install -m 644 "$TMPDIR/db.df10.ip6"                /etc/bind/zones/db.df10.ip6
 
 echo "[6/8] Adding TCP-only upstream blocks if not already present..."
 if grep -q 'tcp-only yes' /etc/bind/named.conf 2>/dev/null; then
@@ -77,55 +83,45 @@ sudo systemctl --no-pager --full status named | sed -n '1,12p' || true
 
 echo ""
 echo "============================================================"
-echo " Download complete. Now finish the required manual steps:"
+echo " Download complete. The zone files are already populated for"
+echo " ${LAB_DOMAIN} (no YOURDOMAIN replacement needed). Now validate:"
 echo "============================================================"
 echo ""
-echo " STEP 1 — Edit named.conf.local and replace BOTH instances of YOURDOMAIN:"
-echo "   sudo nano /etc/bind/named.conf.local"
-echo ""
-echo " STEP 2 — Rename the forward zone file to your actual domain:"
-echo "   sudo mv /etc/bind/zones/db.YOURDOMAIN.com \\"
-echo "           /etc/bind/zones/db.yourname-coursecode.com"
-echo ""
-echo " STEP 3 — Edit the forward zone file and replace every YOURDOMAIN:"
-echo "   sudo nano /etc/bind/zones/db.yourname-coursecode.com"
-echo ""
-echo " STEP 4 — Edit the reverse zone file and replace every YOURDOMAIN:"
-echo "   sudo nano /etc/bind/zones/db.192.168.1"
-echo ""
-echo " STEP 5 — Validate the BIND configuration and both zones:"
+echo " STEP 1 — Validate the BIND configuration and all zones:"
 echo "   sudo named-checkconf"
-echo "   sudo named-checkzone yourname-coursecode.com \\"
-echo "        /etc/bind/zones/db.yourname-coursecode.com"
+echo "   sudo named-checkzone ${LAB_DOMAIN} \\"
+echo "        /etc/bind/zones/db.3014ict.chris.grul.me"
 echo "   sudo named-checkzone 1.168.192.in-addr.arpa \\"
 echo "        /etc/bind/zones/db.192.168.1"
+echo "   sudo named-checkzone 0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa \\"
+echo "        /etc/bind/zones/db.df10.ip6"
 echo ""
-echo " STEP 6 — Restart named after your edits:"
+echo " STEP 2 — Restart named:"
 echo "   sudo systemctl restart named"
 echo ""
-echo " STEP 7 — Confirm BIND is listening on port 53:"
-echo "   sudo ss -tuln | grep 53"
+echo " STEP 3 — Confirm BIND is listening on port 53 (v4 + v6):"
+echo "   sudo ss -tuln | grep ':53'"
 echo ""
-echo " STEP 8 — Test local zone resolution:"
-echo "   dig @127.0.0.1 www.yourname-coursecode.com"
-echo "   dig @127.0.0.1 mail.yourname-coursecode.com"
-echo "   dig @127.0.0.1 -x 192.168.1.80"
+echo " STEP 4 — Test local zone resolution (A + AAAA + PTR):"
+echo "   dig +short @127.0.0.1 www.${LAB_DOMAIN}"
+echo "   dig +short @127.0.0.1 AAAA www.${LAB_DOMAIN}"
+echo "   dig +short @127.0.0.1 ${LAB_DOMAIN} MX"
+echo "   dig +short @127.0.0.1 -x 192.168.1.80"
+echo "   dig +short @127.0.0.1 -x 2404:9400:29c1:df10::80"
 echo ""
-echo " STEP 9 — Test DNSSEC validation:"
+echo " STEP 5 — Test DNSSEC validation:"
 echo "   dig @127.0.0.1 google.com +dnssec"
 echo "   # Look for: flags: qr rd ra ad"
 echo ""
-echo " STEP 10 — Test DNSSEC failure enforcement:"
+echo " STEP 6 — Test DNSSEC failure enforcement:"
 echo "   dig @127.0.0.1 dnssec-failed.org"
 echo "   # Expected: status: SERVFAIL"
 echo ""
-echo " STEP 11 — Then finish the client DNS config on the VMs as required by the activity:"
-echo "   - Internal Gateway should point to 127.0.0.1"
-echo "   - Ubuntu Desktop should point to 10.10.1.254"
-echo "   - Ubuntu Server / External Gateway stay on 8.8.8.8 in this lab"
+echo " STEP 7 — Confirm client DNS on the VMs (as required by the activity):"
+echo "   - Internal Gateway (igw)  -> 127.0.0.1"
+echo "   - Ubuntu Desktop  (dkt)   -> 10.10.1.254   (igw internal leg)"
+echo "   - Ubuntu Server / ExtGW stay on 8.8.8.8 in this lab"
 echo ""
 echo "============================================================"
-echo " Done: BIND9 bootstrap complete."
-echo " Remaining work: domain replacement, validation, dig tests,"
-echo " and VM DNS/netplan changes."
+echo " Done: BIND9 bootstrap complete for ${LAB_DOMAIN}."
 echo "============================================================"

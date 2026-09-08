@@ -1,16 +1,15 @@
-; Reverse zone file for 192.168.1.0/24
-; Replace YOURDOMAIN with your actual domain name throughout this file
+; Reverse zone file for 192.168.1.0/24 (DMZ) — 3014ict.chris.grul.me
 ;
 $TTL    604800
-@       IN      SOA     ns1.YOURDOMAIN.com. admin.YOURDOMAIN.com. (
-                              1         ; Serial
+@       IN      SOA     ns1.3014ict.chris.grul.me. admin.3014ict.chris.grul.me. (
+                              2         ; Serial
                          604800         ; Refresh
                           86400         ; Retry
                         2419200         ; Expire
                          604800 )       ; Negative Cache TTL
 ;
-@       IN      NS      ns1.YOURDOMAIN.com.
+@       IN      NS      ns1.3014ict.chris.grul.me.
 
-1       IN      PTR     ns1.YOURDOMAIN.com.
-80      IN      PTR     www.YOURDOMAIN.com.
-254     IN      PTR     gateway.YOURDOMAIN.com.
+1       IN      PTR     ns1.3014ict.chris.grul.me.
+80      IN      PTR     www.3014ict.chris.grul.me.
+254     IN      PTR     gateway.3014ict.chris.grul.me.

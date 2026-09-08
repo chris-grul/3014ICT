@@ -37,10 +37,10 @@ IS_DESKTOP=( rgw 0  egw 0  igw 0  srv 0  dkt 1 )
 WSTUNNEL=(   rgw wstunnel-server  egw wstunnel-client )
 
 # ---- Lab DNS / mail domain (used by the DNS + Mail activity demos) ----------
-# Set this to your real zone (the guides use yourname-coursecode.com, e.g.
-# chris-3014ict.com). Demos query www.<domain>, mail.<domain> and the zone file
-# /etc/bind/zones/db.<domain>. See the server's /etc/bind/named.conf.local.
-LAB_DOMAIN="chris-3014ict.com"
+# Real split-horizon zone: public records at the registrar (Namecheap), the
+# internal view served by BIND9 on the Internal Gateway (igw). Demos query
+# www.<domain>, mail.<domain> and the zone file /etc/bind/zones/db.<domain>.
+LAB_DOMAIN="3014ict.chris.grul.me"
 
 # ---- Activity metadata ------------------------------------------------------
 VALID_ACTS=(1 2.1 2.2 3 4.1 4.2)
@@ -253,7 +253,10 @@ build_demos() {
         [[ "${IS_WG[$H]}" == 1 ]]      && slide "nftables" "Firewall ruleset" nft "sudo nft list ruleset"
         ;;
       # ---- Activity 2.1: Secure Web (NAT/SSL/Proxy) -------------------------
-      #   ExtGW = nftables NAT+DNAT | Server = Apache | IntGW = Squid:8080 | Desktop = client
+      #   ExtGW = nftables NAT+DNAT | Server = Apache | Desktop = client
+      #   IntGW = Squid: explicit 8080 + transparent intercept 8081/8443
+      #           (ssl-bump peek+bump); internal traffic to 80/443 is DNAT-
+      #           redirected into Squid by igw nftables.
       2.1)
         case "$H" in
           egw)
@@ -266,11 +269,12 @@ build_demos() {
             slide "HTTPS over IPv6" "reach the server on its own v6 address" text "curl -sk -o /dev/null -w 'HTTP %{http_code} via %{remote_ip}\n' 'https://[2404:9400:29c1:df10::80]/'"
             ;;
           igw)
-            slide "Squid — listening on 8080" "forwarding proxy port" text "sudo ss -tuln | grep 8080"
-            slide "Squid — access controls" "allow internal_network; deny during work hours" squidconf "grep -vE '^[[:space:]]*#|^[[:space:]]*\$' /etc/squid/squid.conf"
+            slide "Squid — listeners" "explicit 8080 + intercept 8081 / ssl-bump 8443" text "sudo ss -tlnp | grep -E ':8080|:8081|:8443'"
+            slide "Squid — access policy" "allow internal_network; deny .au sites during office hours" squidconf "grep -vE '^[[:space:]]*#|^[[:space:]]*\$' /etc/squid/squid.conf"
+            slide "Squid — transparent redirect" "igw nftables sends internal 80->8081, 443->8443" nft "sudo nft list table inet nat"
             ;;
           dkt)
-            slide "Web access via the proxy" "reach the DMZ web server through Squid:8080" text "curl -s -x http://192.168.1.1:8080 -o /dev/null -w 'via proxy HTTP %{http_code}\n' http://192.168.1.80/"
+            slide "Web access via the proxy" "reach the DMZ web server through Squid (igw:8080)" text "curl -s -x http://10.10.1.254:8080 -o /dev/null -w 'via proxy HTTP %{http_code}\n' http://192.168.1.80/"
             slide "Direct web (IPv4 + IPv6)" "server reachable on both stacks" text "curl -sk -o /dev/null -w 'v4 %{http_code}\n' https://192.168.1.80/; curl -sk -o /dev/null -w 'v6 %{http_code}\n' 'https://[2404:9400:29c1:df10::80]/'"
             ;;
         esac
