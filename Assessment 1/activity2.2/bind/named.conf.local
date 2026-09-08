@@ -1,0 +1,20 @@
+// Zone definitions for the internal (split-horizon) view — served on igw.
+// Public authoritative records for 3014ict.chris.grul.me are hosted at the
+// registrar (Namecheap); these master zones are the INTERNAL lab view.
+
+zone "3014ict.chris.grul.me" {
+    type master;
+    file "/etc/bind/zones/db.3014ict.chris.grul.me";
+};
+
+// IPv4 reverse — 192.168.1.0/24 (DMZ)
+zone "1.168.192.in-addr.arpa" {
+    type master;
+    file "/etc/bind/zones/db.192.168.1";
+};
+
+// IPv6 reverse — 2404:9400:29c1:df10::/64 (DMZ GUA)
+zone "0.1.f.d.1.c.9.2.0.0.4.9.4.0.4.2.ip6.arpa" {
+    type master;
+    file "/etc/bind/zones/db.df10.ip6";
+};

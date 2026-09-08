@@ -1,0 +1,34 @@
+; Forward zone file — 3014ict.chris.grul.me (internal / split-horizon view)
+; Authoritative view served by BIND9 on the Internal Gateway (igw).
+; Public records for this name are hosted separately at the registrar (Namecheap);
+; this file is the INTERNAL view resolved from within the lab.
+;
+; Addresses reflect the deployed lab (IPv4 192.168.1.0/24 DMZ + GUA
+; 2404:9400:29c1:df10::/64). www/mail live on the Server (srv), ns1 on igw.
+;
+$TTL    604800
+@       IN      SOA     ns1.3014ict.chris.grul.me. admin.3014ict.chris.grul.me. (
+                              3         ; Serial
+                         604800         ; Refresh
+                          86400         ; Retry
+                        2419200         ; Expire
+                         604800 )       ; Negative Cache TTL
+;
+@       IN      NS      ns1.3014ict.chris.grul.me.
+@       IN      MX      10 mail.3014ict.chris.grul.me.
+
+; ---- Name server (Internal Gateway) ----
+ns1     IN      A       192.168.1.1
+ns1     IN      AAAA    2404:9400:29c1:df10::1
+
+; ---- Apex / web / mail (Server) ----
+@       IN      A       192.168.1.80
+@       IN      AAAA    2404:9400:29c1:df10::80
+www     IN      A       192.168.1.80
+www     IN      AAAA    2404:9400:29c1:df10::80
+mail    IN      A       192.168.1.80
+mail    IN      AAAA    2404:9400:29c1:df10::80
+
+; ---- DMZ gateway (External Gateway, DMZ-facing) ----
+gateway IN      A       192.168.1.254
+gateway IN      AAAA    2404:9400:29c1:df10::254

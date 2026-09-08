@@ -344,8 +344,8 @@ echo -e "${BOLD} Next step — test end-to-end delivery:${NC}"
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 echo '  echo "Test email" | mail -s "Test" \'
-echo '    -r server-user@yourdomain.com \'
-echo '    desktop-user@yourdomain.com'
+echo '    -r server-user@3014ict.chris.grul.me \'
+echo '    desktop-user@3014ict.chris.grul.me'
 echo ""
 echo "  Then check: ls -la /home/user1/Maildir/new/"
 echo "  And:        sudo tail -f /var/log/mail.log"

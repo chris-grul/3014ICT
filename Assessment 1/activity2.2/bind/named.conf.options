@@ -1,0 +1,22 @@
+options {
+    directory "/var/cache/bind";
+
+    allow-query {
+        127.0.0.1; ::1;
+        192.168.1.0/24; 10.10.1.0/24;
+        2404:9400:29c1:df10::/64; 2404:9400:29c1:df20::/64;
+    };
+
+    forwarders {
+        8.8.8.8;
+        8.8.4.4;
+    };
+    forward only;
+
+    dnssec-validation auto;
+
+    // igw serves DNS on both its DMZ-facing (eth0) and internal (eth1) legs,
+    // over IPv4 and the lab GUA IPv6.
+    listen-on { 127.0.0.1; 192.168.1.1; 10.10.1.254; };
+    listen-on-v6 { ::1; 2404:9400:29c1:df10::1; 2404:9400:29c1:df20::254; };
+};
