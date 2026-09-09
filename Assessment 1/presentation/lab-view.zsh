@@ -303,7 +303,12 @@ build_demos() {
             slide "BIND9 — service" "named active + enabled at boot" text "systemctl is-active named; sudo systemctl is-enabled named"
             slide "Zone validation" "named-checkconf + named-checkzone" text "sudo named-checkconf && echo 'checkconf: OK'; sudo named-checkzone ${LAB_DOMAIN} /etc/bind/zones/db.${LAB_DOMAIN} 2>&1 | tail -2"
             slide "Forward + reverse + AAAA" "A / AAAA / PTR, straight from BIND" ip "dig +short @127.0.0.1 www.${LAB_DOMAIN}; dig +short @127.0.0.1 AAAA www.${LAB_DOMAIN}; dig +short @127.0.0.1 -x 192.168.1.80"
-            slide "Recursion + DNSSEC" "upstream resolve, ad flag, bogus SERVFAIL" ip "dig +short @127.0.0.1 google.com; echo '-- +dnssec (expect ad) --'; dig @127.0.0.1 google.com +dnssec | grep -E '^;; flags'; echo '-- dnssec-failed (expect SERVFAIL) --'; dig @127.0.0.1 dnssec-failed.org | grep 'status:'"
+            # DNSSEC positive test MUST use a SIGNED zone. google.com is NOT
+            # DNSSEC-signed, so a validating resolver marks it "insecure" and
+            # (correctly) never sets the ad flag. cloudflare.com is signed, so a
+            # successful validation sets ad. dnssec-failed.org is deliberately
+            # broken -> SERVFAIL, proving validation is actually enforced.
+            slide "Recursion + DNSSEC" "upstream resolve, ad flag on a SIGNED zone, bogus SERVFAIL" ip "dig +short @127.0.0.1 google.com; echo '-- +dnssec on a signed zone (expect ad) --'; dig @127.0.0.1 cloudflare.com +dnssec | grep -E '^;; flags'; echo '-- dnssec-failed.org (expect SERVFAIL) --'; dig @127.0.0.1 dnssec-failed.org | grep 'status:'"
             ;;
           srv|dkt)
             slide "Resolver in use" "queries go to the Internal Gateway" text "resolvectl status 2>/dev/null | grep -iA2 'current dns' || cat /etc/resolv.conf"
