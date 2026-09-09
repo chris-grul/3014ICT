@@ -380,7 +380,9 @@ check_ssl_cert_exists() {
     # assuming a fixed filename — the deployed cert can be named anything
     # (e.g. chrisgrul-3014ICT.crt). Runs as root, so /etc/ssl/private is readable.
     local conf cert key
-    conf=$(grep -rlE '^[[:space:]]*SSLCertificateFile' /etc/apache2/sites-enabled/ 2>/dev/null | head -1)
+    # -R (not -r): sites-enabled/*.conf are symlinks into sites-available, and
+    # lowercase -r does not follow symlinks found during recursion.
+    conf=$(grep -RlE '^[[:space:]]*SSLCertificateFile' /etc/apache2/sites-enabled/ 2>/dev/null | head -1)
     if [ -z "$conf" ]; then
         fail "E7" "No enabled Apache SSL vhost references a certificate"
         info "Enable it: sudo a2ensite default-ssl && sudo systemctl reload apache2"

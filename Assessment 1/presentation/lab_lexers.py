@@ -19,7 +19,7 @@ from pygments.style import Style
 from pygments.token import (Comment, Keyword, Literal, Name, Number, Operator,
                             Punctuation, String, Text, Whitespace, Token)
 
-__all__ = ['NftablesLexer', 'SystemdLexer', 'IPAddressFilter', 'LabStyle']
+__all__ = ['NftablesLexer', 'SystemdLexer', 'LabOutputLexer', 'IPAddressFilter', 'LabStyle']
 
 # --- IPv4 / IPv6 address tokens (coloured to match the topology map) ----------
 IPv4 = Token.Net.IPv4
@@ -171,6 +171,61 @@ class SystemdLexer(RegexLexer):
 
 
 # --- Custom colour scheme -----------------------------------------------------
+HEAD = Token.Lab.Head          # "== section ==" banners in command output
+
+
+class LabOutputLexer(RegexLexer):
+    """Generic highlighter for command OUTPUT (curl headers, ss/systemctl, squid
+    logs, tcpdump -X hex, ip a/route). Not a real grammar — it just paints the
+    tokens that matter for the walkthrough so plain 'text' slides are readable.
+    IPv4/IPv6 are recoloured afterwards by IPAddressFilter."""
+    name = 'laboutput'
+    aliases = ['laboutput', 'labout', 'output', 'out']
+    flags = re.MULTILINE
+
+    tokens = {
+        'root': [
+            (r'\n', Whitespace),
+            # line-anchored patterns FIRST (before the whitespace consumer, so a
+            # leading tab doesn't get eaten before these can match at ^):
+            # hex dump lines (tcpdump -X): grey offset, then the bytes are ciphertext
+            (r'^[ \t]*0x[0-9a-fA-F]+:', Comment, 'hexline'),
+            (r'^[ \t]*-{2,}[ \t]*$', Comment),
+            (r'[ \t]+', Whitespace),
+            # our own "== section ==" banners
+            (r'==[^=\n]*==', HEAD),
+            # HTTP status lines, coloured by class
+            (r'HTTP/\d(?:\.\d)?\s+2\d\d\b[^\n]*', V_ACCEPT),
+            (r'HTTP/\d(?:\.\d)?\s+3\d\d\b[^\n]*', Name.Builtin),
+            (r'HTTP/\d(?:\.\d)?\s+[45]\d\d\b[^\n]*', V_DENY),
+            # HTTP/response header name at start of line
+            (r'^([A-Za-z][A-Za-z0-9-]*)(:)(?=[ \t])', bygroups(Name.Attribute, Punctuation)),
+            # squid-style /403 /503 vs /200 result codes
+            (r'/[45]\d\d\b', V_DENY),
+            (r'/2\d\d\b', V_ACCEPT),
+            # keep whole IPs as single tokens so IPAddressFilter can recolour them
+            # (fragmenting into digits would defeat the filter). Emit as Text; the
+            # filter repaints real IPv4/IPv6 and skips MACs.
+            (r'\b\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?\b', Text),                 # IPv4
+            (r'(?:[0-9A-Fa-f]{1,4})?(?::[0-9A-Fa-f]{0,4}){2,}(?:/\d{1,3})?', Text),  # IPv6 (incl ::)
+            # verdict / status keywords
+            (r'\b(?:UP|LISTEN|ESTAB|ESTABLISHED)\b', V_ACCEPT),
+            (r'(?i)\b(?:pass(?:ed)?|active|enabled|running|listening|present|match|success(?:ful)?|succeeded|valid|reachable|allow(?:ed)?|ok)\b', V_ACCEPT),
+            (r'(?i)\b(?:fail(?:ed)?|inactive|disabled|dead|denied|tcp_denied|drop(?:ped)?|reject(?:ed)?|blocked|refused|unreachable|servfail|missing|timeout|invalid|error|down)\b', V_DENY),
+            # TLS / crypto vocabulary
+            (r'(?i)\b(?:TLSv1\.\d|TLS|SSL|Application Data|Client Hello|Server Hello|Handshake|Encrypted|ciphertext|Change Cipher Spec)\b', Name.Constant),
+            (r':\d{2,5}\b', Number),
+            (r'\b\d+\b', Number),
+            (r'[A-Za-z_][\w.-]*', Text),
+            (r'.', Text),
+        ],
+        'hexline': [
+            (r'[^\n]+', Number),       # the whole byte/ascii body = ciphertext
+            (r'\n', Whitespace, '#pop'),
+        ],
+    }
+
+
 class LabStyle(Style):
     """Dark scheme tuned for the walkthrough. Verdicts are the headline:
     accept = green, drop/reject = red, nat = orange."""
@@ -215,6 +270,8 @@ class LabStyle(Style):
         V_NAT:               "bold #e67e22",    # masquerade/snat/dnat -> orange
         V_FLOW:              "bold #f4d03f",    # jump/goto/return -> yellow
         V_OBS:               "#af7ac5",         # log/counter -> purple
+
+        HEAD:                "bold #f39c12",    # "== section ==" banners -> amber
     }
 
 
@@ -233,8 +290,8 @@ def _main():
               'systemd': SystemdLexer}
     if name in custom:
         lexer = custom[name]()
-    elif name in ('ip', 'iproute', 'text', 'plain'):
-        lexer = TextLexer()            # ip a / ip route / plain output
+    elif name in ('ip', 'iproute', 'text', 'plain', 'out', 'output', 'labout', 'laboutput'):
+        lexer = LabOutputLexer()       # generic command-output colouriser
     else:
         try:
             lexer = get_lexer_by_name(name)
