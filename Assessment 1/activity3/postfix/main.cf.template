@@ -24,11 +24,12 @@ mydestination = $myhostname, localhost.localdomain, localhost, DOMAIN
 # — Relay permissions —————————————————————————————————————————————————————————
 # Hosts in these networks can send mail without authentication (this is why
 # Thunderbird on the Desktop works without SMTP auth). Restrict to loopback +
-# the INTERNAL zone only. Do NOT trust the whole /56: it includes df00 (tunnel
-# transit), and the rgw socat SMTP relay sources from df00::254 — trusting /56
-# would let public mail relay straight through us (effective open relay). igw
-# routes internal->DMZ without NAT, so srv sees the real internal source IPs.
-mynetworks = 127.0.0.0/8, [::1]/128, 10.10.1.0/24, [2404:9400:29c1:df20::]/64
+# the INTERNAL zone + the VPN. Do NOT trust the whole /56: it includes df00
+# (tunnel transit), and the rgw socat SMTP relay sources from df00::254 — trusting
+# /56 would let public mail relay straight through us (effective open relay). igw
+# routes the internal and VPN networks to the DMZ without NAT, so srv sees the
+# real source IPs.
+mynetworks = 127.0.0.0/8, [::1]/128, 10.10.1.0/24, [2404:9400:29c1:df20::]/64, 10.8.0.0/24, [2404:9400:29c1:df80::]/64
 
 # — Mailbox format ————————————————————————————————————————————————————————————
 # Deliver to Maildir format — each message is a separate file under ~/Maildir/

@@ -11,12 +11,12 @@ mailbox_transport = lmtp:unix:private/dovecot-lmtp
 mydestination = $myhostname, localhost.localdomain, localhost, 3014ict.chris.grul.me
 mydomain = 3014ict.chris.grul.me
 myhostname = mail.3014ict.chris.grul.me
-# Relay trust: loopback (the server's own mail) + the INTERNAL zone only.
+# Relay trust: loopback (the server's own mail) + the INTERNAL zone + the VPN.
 # NOT the whole /56 — that included df00 (tunnel transit), and the rgw socat SMTP
 # relay sources from df00::254, so trusting /56 let public mail relay through us
-# (effective open relay). NOT the DMZ (192.168.1.0/24) either. igw routes
-# internal->DMZ without NAT, so srv sees the real internal source IPs.
-mynetworks = 127.0.0.0/8, [::1]/128, 10.10.1.0/24, [2404:9400:29c1:df20::]/64
+# (effective open relay). NOT the DMZ (192.168.1.0/24) either. igw routes the
+# internal and VPN networks to the DMZ without NAT, so srv sees the real source IPs.
+mynetworks = 127.0.0.0/8, [::1]/128, 10.10.1.0/24, [2404:9400:29c1:df20::]/64, 10.8.0.0/24, [2404:9400:29c1:df80::]/64
 myorigin = $mydomain
 relayhost = [smtp.resend.com]:587
 smtp_sasl_auth_enable = yes
