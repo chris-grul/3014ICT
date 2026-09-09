@@ -324,6 +324,12 @@ build_demos() {
             slide "Postfix — config" "postconf -n (inet_protocols, virtual)" text "postconf -n"
             slide "Dovecot — config" "doveconf -n (protocols, listen)" text "doveconf -n 2>/dev/null | head -30"
             slide "Mail listeners" "SMTP/IMAP/POP on IPv4 + [::]" text "sudo ss -tuln | grep -E ':25|:143|:993|:110|:995'"
+            # Drive this AFTER sending the mail from Thunderbird (desktop-user ->
+            # server-user). Shows the message sitting in user2's Maildir: the
+            # listing proves it landed, the headers prove sender/recipient, the raw
+            # dump shows the real on-disk RFC 5322 message. Reading another user's
+            # Maildir needs root -> the deploy pins these exact commands (no wildcards).
+            slide "Mail delivered — user2 Maildir" "the email you sent from Thunderbird: desktop-user (user1) -> server-user (user2)" text "echo '== /home/user2/Maildir  (new = just delivered, cur = already opened by a client) =='; sudo ls -la /home/user2/Maildir/new /home/user2/Maildir/cur 2>/dev/null; echo; echo '== key headers — who sent it, to whom =='; sudo find /home/user2/Maildir/new /home/user2/Maildir/cur -type f -exec cat {} + 2>/dev/null | grep -iE '^(From|To|Subject|Date|Return-Path):'; echo; echo '== raw message on disk (headers + body) =='; sudo find /home/user2/Maildir/new /home/user2/Maildir/cur -type f -exec cat {} + 2>/dev/null | sed -n '1,45p'; echo; echo 'Empty above? Send the mail from Thunderbird (desktop-user -> server-user), then re-run this host.'"
             ;;
           igw)
             slide "DNS — MX + AAAA" "mail route + mail.${LAB_DOMAIN}" ip "dig +short @127.0.0.1 ${LAB_DOMAIN} MX; dig +short @127.0.0.1 AAAA mail.${LAB_DOMAIN}"
