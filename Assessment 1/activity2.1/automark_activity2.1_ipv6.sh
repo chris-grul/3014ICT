@@ -185,6 +185,24 @@ check_https_insecure() {
     fi
 }
 
+# HTTPS reachability with SNI supplied. The desktop's :443 traffic is
+# transparently redirected into Squid ssl-bump on the Internal Gateway; a bare-IP
+# request carries no SNI, so Squid cannot peek the host and returns 503. Mapping a
+# dummy hostname to the target (via --resolve) supplies SNI so the bump succeeds.
+# $1=address  $2=curl family flag (-4/-6)  $3=label  $4=error code
+check_https_sni() {
+    local addr=$1 fam=$2 label=$3 error_code=$4 http_code
+    http_code=$(curl $fam -sk --resolve "labweb:443:${addr}" -o /dev/null \
+        -w "%{http_code}" --max-time 8 "https://labweb/" 2>/dev/null)
+    if [[ "$http_code" =~ ^[23] ]]; then
+        pass "HTTPS $http_code from $label (SNI supplied)"
+    else
+        fail "$error_code" "$label HTTPS failed — HTTP ${http_code:-no response}"
+        info "A bare-IP HTTPS request through Squid transparent ssl-bump returns 503 (no SNI)."
+        info "This test supplies SNI via --resolve; if it still fails, check Squid ssl_bump and that the server listens on :443."
+    fi
+}
+
 check_internet() {
     local error_code=$1
     local urls=("https://example.com" "https://www.google.com" "https://1.1.1.1")
@@ -358,11 +376,24 @@ check_squid_rule_order() {
 # =============================================================================
 
 check_ssl_cert_exists() {
-    if [ -f /etc/ssl/certs/apache-selfsigned.crt ] && [ -f /etc/ssl/private/apache-selfsigned.key ]; then
-        pass "SSL certificate and key files exist"
+    # Read the ACTUAL cert/key paths from the enabled Apache SSL vhost instead of
+    # assuming a fixed filename — the deployed cert can be named anything
+    # (e.g. chrisgrul-3014ICT.crt). Runs as root, so /etc/ssl/private is readable.
+    local conf cert key
+    conf=$(grep -rlE '^[[:space:]]*SSLCertificateFile' /etc/apache2/sites-enabled/ 2>/dev/null | head -1)
+    if [ -z "$conf" ]; then
+        fail "E7" "No enabled Apache SSL vhost references a certificate"
+        info "Enable it: sudo a2ensite default-ssl && sudo systemctl reload apache2"
+        return
+    fi
+    cert=$(grep -iE '^[[:space:]]*SSLCertificateFile'    "$conf" | awk '{print $2}' | tr -d '"' | head -1)
+    key=$( grep -iE '^[[:space:]]*SSLCertificateKeyFile' "$conf" | awk '{print $2}' | tr -d '"' | head -1)
+    if [ -n "$cert" ] && [ -f "$cert" ] && [ -n "$key" ] && [ -f "$key" ]; then
+        pass "SSL cert + key present ($cert / $key)"
     else
         fail "E7" "SSL cert or key missing"
-        info "Expected: /etc/ssl/certs/apache-selfsigned.crt and /etc/ssl/private/apache-selfsigned.key"
+        info "Vhost $conf references cert='${cert:-?}' key='${key:-?}' — ensure both files exist."
+        info "Check yourself:  grep -iE 'SSLCertificate(File|KeyFile)' $conf ; ls -l \"\$cert\" \"\$key\""
     fi
 }
 
@@ -416,8 +447,12 @@ check_custom_webpage() {
     elif echo "$content" | grep -qi "Apache2 Default Page\|It works"; then
         fail "E6" "Apache is serving the default page — custom content not configured"
         info "Edit /var/www/html/index.html and replace the default content with your name"
+    elif [ -n "$content" ]; then
+        # Non-empty and NOT the stock Apache page => custom content, just worded
+        # differently from the sample phrase. That is fine.
+        pass "Custom (non-default) page content is being served"
     else
-        warn "Could not confirm custom page content — check manually in browser"
+        warn "No content returned from http://localhost — check Apache is up and DocumentRoot has an index"
     fi
 }
 
@@ -776,8 +811,11 @@ run_ubuntu_desktop() {
     echo -e "\n${BOLD}${CYAN}VM detected: Ubuntu Desktop${NC}"
 
     section "Part C — Web Server Access (E7)"
-    check_http           "http://192.168.1.80"  "Ubuntu Server HTTP (direct)"  "E7"
-    check_https_insecure "https://192.168.1.80" "Ubuntu Server HTTPS (direct)" "E7"
+    # NB: the desktop's web traffic is transparently redirected into Squid on the
+    # Internal Gateway (igw nftables 80->8081, 443->8443 ssl-bump). HTTP carries a
+    # Host header so the IP form is fine; HTTPS needs SNI (see check_https_sni).
+    check_http     "http://192.168.1.80" "Ubuntu Server HTTP (via transparent proxy)" "E7"
+    check_https_sni "192.168.1.80" "-4"  "Ubuntu Server HTTPS (via transparent proxy)" "E7"
 
     section "Part D — Squid Proxy Reachability (E8)"
     if nc -z -w 3 10.10.1.254 8080 2>/dev/null; then
@@ -814,7 +852,9 @@ run_ubuntu_desktop() {
     check_route6_get "2001:4860:4860::8888" "via 2404:9400:29c1:df20::254" "E14" "internet (default via IntGW)"
 
     section "IPv6 Service — Web Server Access over IPv6 (E18)"
-    check_curl6 "https://[2404:9400:29c1:df10::80]/" "Ubuntu Server HTTPS (direct, IPv6)" "E18"
+    # Also transparently bumped by Squid (igw nftables is table inet = v4+v6), so
+    # supply SNI here too rather than requesting the bare IPv6 literal.
+    check_https_sni "2404:9400:29c1:df10::80" "-6" "Ubuntu Server HTTPS over IPv6 (via transparent proxy)" "E18"
 
     section "IPv6 Service — Web Access via Squid over IPv6 (E18)"
     # ASSUMPTION: Squid also serves the internal /64 gateway address over IPv6 on 8080.

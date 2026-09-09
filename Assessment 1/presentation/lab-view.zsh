@@ -264,12 +264,12 @@ build_demos() {
         case "$H" in
           egw)
             slide "nftables — NAT & port-forward" "DNAT 80/443 -> 192.168.1.80, masquerade" nft "sudo nft list ruleset"
-            slide "Internet + persistence" "egress works; ruleset enabled at boot" text "curl -I -s https://google.com | head -1; sudo systemctl is-enabled nftables"
+            slide "Internet + persistence" "egress works; ruleset enabled at boot" text "curl -sSI https://google.com | head -6; echo; sudo systemctl is-enabled nftables"
             ;;
           srv)
             slide "Apache — service + listeners" "active, listening 80/443 (incl. [::])" text "systemctl is-active apache2; echo; sudo ss -tuln | grep -E ':80|:443'"
-            slide "Apache over HTTP + HTTPS" "local HTTP and self-signed HTTPS" text "curl -s -o /dev/null -w 'HTTP  %{http_code}\n' http://localhost; curl -sk -o /dev/null -w 'HTTPS %{http_code}\n' https://localhost"
-            slide "HTTPS over IPv6" "reach the server on its own v6 address" text "curl -sk -o /dev/null -w 'HTTP %{http_code} via %{remote_ip}\n' 'https://[2404:9400:29c1:df10::80]/'"
+            slide "Apache over HTTP + HTTPS" "local HTTP redirect + self-signed HTTPS" text "echo '== HTTP =='; curl -sSI http://localhost | head -5; echo '== HTTPS =='; curl -sSIk https://localhost | head -5"
+            slide "HTTPS over IPv6" "reach the server on its own v6 address" text "curl -sSIk 'https://[2404:9400:29c1:df10::80]/' | head -6"
             ;;
           igw)
             slide "Squid — listeners" "explicit 8080 + intercept 8081 / ssl-bump 8443" text "sudo ss -tlnp | grep -E ':8080|:8081|:8443'"
@@ -277,8 +277,12 @@ build_demos() {
             slide "Squid — transparent redirect" "igw nftables sends internal 80->8081, 443->8443" nft "sudo nft list table inet nat"
             ;;
           dkt)
-            slide "Web access via the proxy" "reach the DMZ web server through Squid (igw:8080)" text "curl -s -x http://10.10.1.254:8080 -o /dev/null -w 'via proxy HTTP %{http_code}\n' http://192.168.1.80/"
-            slide "Direct web (IPv4 + IPv6)" "server reachable on both stacks" text "curl -sk -o /dev/null -w 'v4 %{http_code}\n' https://192.168.1.80/; curl -sk -o /dev/null -w 'v6 %{http_code}\n' 'https://[2404:9400:29c1:df10::80]/'"
+            slide "Web access via the proxy" "explicit proxy -> DMZ web server (note Squid Via/X-Cache headers)" text "curl -sS -x http://10.10.1.254:8080 -D - -o /dev/null http://192.168.1.80/ | head -12"
+            # Not 'direct': the desktop's :443 is transparently redirected into
+            # Squid ssl-bump. Request by NAME so SNI is present (a bare IP has no
+            # SNI and Squid returns 503). This shows DNS -> transparent proxy ->
+            # server, on both stacks.
+            slide "Web by name (via transparent proxy)" "DNS name -> Squid ssl-bump -> server, IPv4 + IPv6" text "echo '== IPv4 =='; curl -4 -sSik https://www.${LAB_DOMAIN}/ | head -10; echo; echo '== IPv6 =='; curl -6 -sSik https://www.${LAB_DOMAIN}/ | head -10"
             ;;
         esac
         ;;
@@ -320,8 +324,8 @@ build_demos() {
         case "$H" in
           egw)
             slide "nftables — full ruleset" "policies, DNAT/SNAT, ICMPv6, port-forward 80/443/25" nft "sudo nft list ruleset"
-            slide "DMZ web reachable via DNAT" "http/https to 192.168.1.80 (ping is blocked by design)" text "curl -I -s http://192.168.1.80 | head -1; curl -Ik -s https://192.168.1.80 | head -1"
-            slide "Internet egress (IPv4 + IPv6)" "return path works on both stacks" text "curl -I -s https://google.com | head -1; curl -6 -I -s https://google.com | head -1"
+            slide "DMZ web reachable via DNAT" "http/https to 192.168.1.80 (ping is blocked by design)" text "echo '== HTTP =='; curl -sSI http://192.168.1.80 | head -5; echo '== HTTPS =='; curl -sSIk https://192.168.1.80 | head -5"
+            slide "Internet egress (IPv4 + IPv6)" "return path works on both stacks" text "echo '== IPv4 =='; curl -sSI https://google.com | head -4; echo '== IPv6 =='; curl -6 -sSI https://google.com | head -4"
             ;;
           rgw)
             slide "nftables — tunnel edge" "IPv6 forward + masquerade to the /56" nft "sudo nft list ruleset"
@@ -363,6 +367,9 @@ show_host() {
         lexer="${slide%%$'\t'*}"; cmd="${slide#*$'\t'}"
         host_banner "$H"
         print_title "$title" "$sub"
+        # Show the exact command being run (dim). print -r (not -P) so a curl
+        # '%{...}' format string isn't eaten by prompt expansion.
+        print -r -- $'\e[2m$ '"$cmd"$'\e[0m'
         hl "$(run "$H" "$cmd")" "$lexer"
         wait_for_enter
     done
@@ -374,7 +381,9 @@ show_host() {
     wait_for_enter
 
     # --- IPv6 verification (labels local, tests run on the remote) ---
-    if (( SHOW_IPV6_VERIFY )); then
+    # Only for Activity 1 — the generic IPv6 capability demo is shown once there;
+    # later activities have their own IPv6 evidence in the demos + automarker.
+    if (( SHOW_IPV6_VERIFY )) && [[ "$ACTIVITY" == 1 ]]; then
         host_banner "$H"
         print_title "IPv6 verification" "Testing IPv6 capability"
         print -P "%F{202}Show IPv6 routes%f"
