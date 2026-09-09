@@ -344,12 +344,30 @@ build_demos() {
       4.1)
         case "$H" in
           egw)
-            slide "nftables — full ruleset" "policies, DNAT/SNAT, ICMPv6, port-forward 80/443/25" nft "sudo nft list ruleset"
-            slide "DMZ web reachable via DNAT" "http/https to 192.168.1.80 (ping is blocked by design)" text "echo '== HTTP =='; curl -sSI http://192.168.1.80 | head -5; echo '== HTTPS =='; curl -sSIk https://192.168.1.80 | head -5"
-            slide "Internet egress (IPv4 + IPv6)" "return path works on both stacks" text "echo '== IPv4 =='; curl -sSI https://google.com | head -4; echo '== IPv6 =='; curl -6 -sSI https://google.com | head -4"
+            # Part B — the hardened ruleset: default-drop inet filter (7-rule
+            # forward), ip nat DNAT (80/443/25) + masquerade/SNAT, plus our merged
+            # IPv6 rules (ICMPv6, wg0 forward). A complete listing IS the evidence
+            # the file loaded without errors.
+            slide "nftables — full ruleset (loaded & active)" "default-drop inet filter + ip nat DNAT/SNAT + merged IPv6/ICMPv6" nft "sudo nft list ruleset"
+            # Part D — persistence: enabled + active means the ruleset reloads from
+            # /etc/nftables.conf on every boot (is-enabled/is-active need no sudo).
+            slide "Firewall persists (Part D)" "nftables.service enabled + active -> ruleset survives reboot" text "echo -n 'enabled: '; systemctl is-enabled nftables; echo -n 'active : '; systemctl is-active nftables"
+            # Part C — web forwarded to the DMZ server (DNAT + forward accept).
+            slide "Web forwarded to DMZ server (80/443)" "DNAT + forward-accept -> 192.168.1.80 (ping blocked by design)" text "echo '== HTTP =='; curl -sSI http://192.168.1.80 | head -5; echo '== HTTPS =='; curl -sSIk https://192.168.1.80 | head -5"
+            # Part C — SMTP forwarded to the mail server. bash /dev/tcp (wrapped so
+            # it works regardless of the login shell); no nc dependency, no sudo.
+            slide "SMTP forwarded to mail server (25)" "DNAT + forward-accept -> 192.168.1.80:25 (Connection succeeded)" text "timeout 4 bash -c 'echo > /dev/tcp/192.168.1.80/25' && echo 'port 25 reachable through the firewall (192.168.1.80) — Connection succeeded' || echo 'port 25 NOT reachable — check Postfix + forward/DNAT rules'"
+            # Part C / Part B — internet still reachable with default-drop active.
+            slide "Internet egress (IPv4 + IPv6)" "default-drop forward still permits outbound on both stacks" text "echo '== IPv4 =='; curl -sSI https://google.com | head -4; echo; echo '== IPv6 =='; curl -6 -sSI https://google.com | head -4"
+            # Our IPv6 merge in action: ICMPv6 + reaching the DMZ server on its real
+            # global v6 address (no NAT — direct to df10::80).
+            slide "IPv6 through the firewall" "merged inet rules: ICMPv6 works + DMZ server reachable on its global v6" text "echo '== ping6 the DMZ server =='; ping -6 -c2 -W2 2404:9400:29c1:df10::80 | tail -3; echo; echo '== HTTPS over IPv6 =='; curl -6 -sSIk 'https://[2404:9400:29c1:df10::80]/' | head -3"
             ;;
           rgw)
             slide "nftables — tunnel edge" "IPv6 forward + masquerade to the /56" nft "sudo nft list ruleset"
+            # End-to-end IPv6 forward test: rgw -> wg0 tunnel -> egw forward chain ->
+            # eth1 -> DMZ server. This genuinely traverses egw's IPv6 forward rules.
+            slide "Reach the DMZ server over IPv6 (through egw)" "rgw -> tunnel -> egw forward -> df10::80 web server" text "echo '== ping6 =='; ping -6 -c2 -W2 2404:9400:29c1:df10::80 | tail -3; echo; echo '== HTTPS =='; curl -6 -sSIk 'https://[2404:9400:29c1:df10::80]/' | head -3"
             ;;
         esac
         ;;

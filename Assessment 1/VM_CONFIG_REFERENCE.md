@@ -91,10 +91,16 @@ WireGuard is therefore wrapped in **wstunnel** (WebSocket over TCP/443):
 - **rgw** — `inet filter` input default-drop (SSH restricted to the admin
   ranges below; TCP/443 open for wstunnel on IPv4 only); `ip6 filter forward`
   clamps MSS and forwards `wg0 ↔ eth0` for the `/56`.
-- **egw** — `inet filter` input default-drop; `ip filter forward` allows LAN
-  egress and inbound `80/443` to the web server; `ip6 filter forward` routes
-  `eth1 → wg0` (MSS clamped); `ip nat` DNATs `80/443 → 192.168.1.80` and
-  masquerades out `eth0`.
+- **egw** — Activity 4.1 hardened firewall, **merged IPv4 + IPv6** in one
+  `inet filter` table (all chains default-drop). `forward` permits DMZ egress
+  (`eth1 → eth0` IPv4, `eth1 → wg0` IPv6) and inbound `80/443/25` to the server
+  (`eth0 → eth1` IPv4 via DNAT, `wg0 → eth1` IPv6 direct to `df10::80`), plus
+  ICMPv6 (ND + PMTUD + echo) and IPv4 DNS forwarding. `input` allows admin SSH
+  from the documented ranges. `ip nat` (IPv4-only) DNATs `80/443/25 → 192.168.1.80`,
+  masquerades out `eth0`, and SNATs the server's return traffic to `192.168.1.254`.
+  IPv6 needs no NAT (the server has a real global `df10::80`). The provided guide's
+  ruleset is IPv4-only; `deploy-lab-view.zsh` idempotently installs this merged
+  version on egw.
 - **igw** — filter chains are open (it is an internal router); `inet nat`
   prerouting **redirects internal `tcp/80 → :8081` and `tcp/443 → :8443`** to
   force client web traffic through Squid (transparent interception). The DMZ
