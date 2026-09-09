@@ -308,7 +308,7 @@ build_demos() {
             # (correctly) never sets the ad flag. cloudflare.com is signed, so a
             # successful validation sets ad. dnssec-failed.org is deliberately
             # broken -> SERVFAIL, proving validation is actually enforced.
-            slide "Recursion + DNSSEC" "upstream resolve, ad flag on a SIGNED zone, bogus SERVFAIL" ip "dig +short @127.0.0.1 google.com; echo '-- +dnssec on a signed zone (expect ad) --'; dig @127.0.0.1 cloudflare.com +dnssec | grep -E '^;; flags'; echo '-- dnssec-failed.org (expect SERVFAIL) --'; dig @127.0.0.1 dnssec-failed.org | grep 'status:'"
+            slide "Recursion + DNSSEC" "upstream resolve, ad flag on a SIGNED zone, bogus SERVFAIL" ip "dig +short @127.0.0.1 google.com; echo '-- +dnssec on a signed zone (expect ad) --'; dig @127.0.0.1 cloudflare.com +dnssec | grep -E '^;; flags'; echo '-- dnssec-failed.org (expect SERVFAIL) --'; sf=\$(dig @127.0.0.1 dnssec-failed.org | grep 'status:'); echo \"\$sf\"; echo \"\$sf\" | grep -q SERVFAIL && echo '   ✓ correctly rejected (DNSSEC validation enforced)' || echo '   ✗ NOT rejected — DNSSEC not enforced'"
             ;;
           srv|dkt)
             slide "Resolver in use" "queries go to the Internal Gateway" text "resolvectl status 2>/dev/null | grep -iA2 'current dns' || cat /etc/resolv.conf"
