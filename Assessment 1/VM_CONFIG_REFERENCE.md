@@ -90,7 +90,12 @@ WireGuard is therefore wrapped in **wstunnel** (WebSocket over TCP/443):
 
 - **rgw** — `inet filter` input default-drop (SSH restricted to the admin
   ranges below; TCP/443 open for wstunnel on IPv4 only); `ip6 filter forward`
-  clamps MSS and forwards `wg0 ↔ eth0` for the `/56`.
+  clamps MSS and forwards `wg0 ↔ eth0` for the `/56`. A **socat SMTP relay**
+  (`labview-smtp-forward.service`) accepts public IPv4 `:25` and forwards it to
+  the DMZ server over IPv6 (`[df10::80]:25`) — netfilter can't DNAT across
+  address families, and only IPv6 reaches the lab over the tunnel. `input` `:25`
+  and the outbound v6 are opened for it. Applied idempotently by
+  `deploy-lab-view.zsh` (rgw only). Plain TCP relay, so srv sees rgw as the peer.
 - **egw** — Activity 4.1 hardened firewall, **merged IPv4 + IPv6** in one
   `inet filter` table (all chains default-drop). `forward` permits DMZ egress
   (`eth1 → eth0` IPv4, `eth1 → wg0` IPv6) and inbound `80/443/25` to the server
