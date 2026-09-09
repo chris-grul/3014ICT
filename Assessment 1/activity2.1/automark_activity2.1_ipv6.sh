@@ -643,10 +643,14 @@ run_external_gateway() {
     section "IPv6 nftables — Inbound Web Forward (E16)"
     # IPv4 uses table ip nat DNAT (80/443 -> 192.168.1.80) plus an inet-filter forward accept.
     # For IPv6 native routing there is typically no DNAT: mirror the forward-accept path instead.
-    check_nft6 'iif(name)? "eth0" oif(name)? "eth1" tcp dport [{] 80, 443 [}] ct state new accept' \
-        "IPv6/inet forward accept: eth0 -> eth1 web (80,443) to server" "E16"
-    check_nft6 'iif(name)? "eth1" oif(name)? "eth0" accept' \
-        "IPv6/inet forward accept: eth1 -> eth0 (DMZ to internet)" "E16"
+    # IPv6 reaches the DMZ over the WireGuard tunnel (wg0), not the IPv4 WAN
+    # (eth0). Inbound web is wg0 -> eth1 :80/443; egress is eth1 -> wg0. (The
+    # real inbound-web rule has no "ct state new" — return traffic is handled by
+    # the established,related rule — so don't require it.)
+    check_nft6 'iif(name)? "wg0" oif(name)? "eth1" tcp dport [{] 80, 443 [}] accept' \
+        "IPv6 forward accept: wg0 -> eth1 web (80,443) to server" "E16"
+    check_nft6 'iif(name)? "eth1" oif(name)? "wg0" accept' \
+        "IPv6 forward accept: eth1 -> wg0 (DMZ to internet via tunnel)" "E16"
 
     section "IPv6 Connectivity (E17)"
     check_ping6 "2404:9400:29c1:df10::1"  "Internal Gateway (DMZ side)" "E17"
