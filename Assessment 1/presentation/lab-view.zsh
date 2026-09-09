@@ -270,11 +270,19 @@ build_demos() {
             slide "Apache — service + listeners" "active, listening 80/443 (incl. [::])" text "systemctl is-active apache2; echo; sudo ss -tuln | grep -E ':80|:443'"
             slide "Apache over HTTP + HTTPS" "local HTTP redirect + self-signed HTTPS" text "echo '== HTTP =='; curl -sSI http://localhost | head -5; echo '== HTTPS =='; curl -sSIk https://localhost | head -5"
             slide "HTTPS over IPv6" "reach the server on its own v6 address" text "curl -sSIk 'https://[2404:9400:29c1:df10::80]/' | head -6"
+            # Challenge item: capture tcp/443 while making an HTTPS request and
+            # show the payload is TLS Application Data (ciphertext), NOT readable
+            # HTML. Needs a pinned passwordless-sudo grant for tcpdump (deploy).
+            slide "TLS on the wire (:443)" "packet capture shows encrypted TLS records — the HTML is not readable" text "sudo tcpdump -i any -c 20 -nn -A tcp port 443 > /tmp/lab_cap443.txt 2>/dev/null & sleep 1; curl -sk https://localhost/ >/dev/null 2>&1; curl -sk https://localhost/ >/dev/null 2>&1; curl -sk https://localhost/ >/dev/null 2>&1; curl -sk https://localhost/ >/dev/null 2>&1; wait; echo '== bytes seen on tcp/443 (ASCII view) =='; sed -n '1,28p' /tmp/lab_cap443.txt; printf '\nreadable HTML/HTTP visible on the wire? '; grep -qiE '<html|<title|<body|HTTP/1.1 |GET / HTTP' /tmp/lab_cap443.txt && echo 'YES (unexpected)' || echo 'NO -> only TLS Application Data (ciphertext)'; rm -f /tmp/lab_cap443.txt"
             ;;
           igw)
             slide "Squid — listeners" "explicit 8080 + intercept 8081 / ssl-bump 8443" text "sudo ss -tlnp | grep -E ':8080|:8081|:8443'"
             slide "Squid — access policy" "allow internal_network; deny .au sites during office hours" squidconf "grep -vE '^[[:space:]]*#|^[[:space:]]*\$' /etc/squid/squid.conf"
             slide "Squid — transparent redirect" "igw nftables sends internal 80->8081, 443->8443" nft "sudo nft list table inet nat"
+            # Challenge item: the office-hours .au block you just triggered in the
+            # browser, straight from Squid's access log (TCP_DENIED/403). Needs a
+            # pinned passwordless-sudo grant for tail on the squid log (deploy).
+            slide "Squid — office-hours DENIED log" "the .au block you just triggered in the browser (TCP_DENIED/403)" text "sudo tail -n 500 /var/log/squid/access.log 2>/dev/null | grep -E 'TCP_DENIED|DENIED' | tail -20; echo '---'; echo 'Empty above? Drive a .au site in Firefox during 09:00-17:00 to trigger the deny, then re-run this host.'"
             ;;
           dkt)
             slide "Web access via the proxy" "explicit proxy -> DMZ web server (note Squid Via/X-Cache headers)" text "curl -sS -x http://10.10.1.254:8080 -D - -o /dev/null http://192.168.1.80/ | head -12"
