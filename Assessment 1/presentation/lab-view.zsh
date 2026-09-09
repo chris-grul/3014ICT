@@ -244,7 +244,9 @@ build_demos() {
     DEMO_SLIDES=()
     local H="$1"
     case "$ACTIVITY" in
-      # ---- Activity 1: DMZ Networks — config walkthrough on every host ------
+      # ---- Activity 1: DMZ Networks — trimmed for time: netplan + IP only ----
+      # (WireGuard/wstunnel/sysctl/nftables slides removed; the automarker still
+      # runs after these and covers the rest.)
       1)
         if [[ "${IS_DESKTOP[$H]}" == 1 ]]; then
             slide "Netplan configuration" "Interface addressing" yaml "sudo cat /etc/netplan/90*"
@@ -252,12 +254,6 @@ build_demos() {
             slide "Netplan configuration" "Interface addressing" yaml "sudo cat /etc/netplan/50-cloud-init.yaml"
         fi
         slide "IP Assignment" "Configured addresses and routes" ip "ip a; ip route; ip -6 route"
-        if [[ "${IS_WG[$H]}" == 1 ]]; then
-            slide "WireGuard" "wg0 tunnel configuration" ini "sudo cat /etc/wireguard/wg0.conf"
-            slide "wstunnel" "WireGuard over TCP/443" systemd "cat /etc/systemd/system/${WSTUNNEL[$H]}.service"
-        fi
-        [[ "${IS_GATEWAY[$H]}" == 1 ]] && slide "Sysctl forwarding" "IPv4 + IPv6 forwarding" text "sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding"
-        [[ "${IS_WG[$H]}" == 1 ]]      && slide "nftables" "Firewall ruleset" nft "sudo nft list ruleset"
         ;;
       # ---- Activity 2.1: Secure Web (NAT/SSL/Proxy) -------------------------
       #   ExtGW = nftables NAT+DNAT | Server = Apache | Desktop = client
