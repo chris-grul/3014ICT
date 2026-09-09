@@ -534,8 +534,12 @@ run_external_gateway() {
     section "IPv6 nftables — Forward eth1<->wg0 (E11)"
     check_nft6 'iif(name)? "eth1" oif(name)? "wg0" accept' \
         "IPv6/inet forward accept: eth1 -> wg0 (DMZ to tunnel)" "E11"
-    check_nft6 'iif(name)? "wg0" oif(name)? "eth1" accept' \
-        "IPv6/inet forward accept: wg0 -> eth1 (tunnel to DMZ)" "E11"
+    # Return path (tunnel -> DMZ): accept EITHER a blanket accept OR the more
+    # secure stateful return (established,related), which the deployed egw uses
+    # alongside explicit published-service rules (80/443, SSH). A blanket
+    # wg0 -> eth1 accept is NOT required and is the weaker design.
+    check_nft6 'iif(name)? "wg0" oif(name)? "eth1" (ct state [a-z,]*established[a-z,]* )?accept' \
+        "IPv6/inet forward: wg0 -> eth1 return path (established,related or blanket)" "E11"
 
     section "Tunnel Services (E14)"
     for _svc in wstunnel-client wg-quick@wg0; do
