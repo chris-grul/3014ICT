@@ -186,20 +186,24 @@ check_https_insecure() {
 }
 
 # HTTPS reachability with SNI supplied. The desktop's :443 traffic is
-# transparently redirected into Squid ssl-bump on the Internal Gateway; a bare-IP
-# request carries no SNI, so Squid cannot peek the host and returns 503. Mapping a
-# dummy hostname to the target (via --resolve) supplies SNI so the bump succeeds.
+# transparently redirected into Squid ssl-bump on the Internal Gateway. A bare-IP
+# request carries NO SNI, so Squid cannot peek the host and returns 503. We supply
+# a REAL hostname from the server certificate's SAN list as the SNI, pinned to the
+# target address/family with --resolve (so no DNS is needed, and the address family
+# under test is exact). A real cert name matters especially over IPv6, where Squid
+# may fall back to the SNI to reach/verify the origin — a dummy name then fails.
 # $1=address  $2=curl family flag (-4/-6)  $3=label  $4=error code
+SNI_HOST="www.chrisgrul-3014ict.com"        # present in the web server cert SANs
 check_https_sni() {
     local addr=$1 fam=$2 label=$3 error_code=$4 http_code
-    http_code=$(curl $fam -sk --resolve "labweb:443:${addr}" -o /dev/null \
-        -w "%{http_code}" --max-time 8 "https://labweb/" 2>/dev/null)
+    http_code=$(curl $fam -sk --resolve "${SNI_HOST}:443:${addr}" -o /dev/null \
+        -w "%{http_code}" --max-time 8 "https://${SNI_HOST}/" 2>/dev/null)
     if [[ "$http_code" =~ ^[23] ]]; then
-        pass "HTTPS $http_code from $label (SNI supplied)"
+        pass "HTTPS $http_code from $label (SNI ${SNI_HOST})"
     else
         fail "$error_code" "$label HTTPS failed — HTTP ${http_code:-no response}"
-        info "A bare-IP HTTPS request through Squid transparent ssl-bump returns 503 (no SNI)."
-        info "This test supplies SNI via --resolve; if it still fails, check Squid ssl_bump and that the server listens on :443."
+        info "Through Squid transparent ssl-bump, a bare-IP request (no SNI) 503s; this test supplies the real cert name ${SNI_HOST} via --resolve."
+        info "If it still 503s over IPv6: confirm Squid gets the original IPv6 destination on intercept and can reach the origin on [::]:443 (sudo ss -tlnp | grep 8443; sudo squid -k parse)."
     fi
 }
 
