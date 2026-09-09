@@ -97,7 +97,12 @@ WireGuard is therefore wrapped in **wstunnel** (WebSocket over TCP/443):
   masquerades out `eth0`.
 - **igw** — filter chains are open (it is an internal router); `inet nat`
   prerouting **redirects internal `tcp/80 → :8081` and `tcp/443 → :8443`** to
-  force client web traffic through Squid (transparent interception).
+  force client web traffic through Squid (transparent interception). The DMZ
+  server **srv (`192.168.1.80` / `2404:9400:29c1:df10::80`) is excluded** from
+  this intercept for both families — two `return` rules ahead of the redirects
+  send its `80/443` traffic direct to Apache (so bare-IP HTTPS works without
+  ssl-bump/SNI). External traffic is still intercepted. Applied idempotently by
+  `deploy-lab-view.zsh`.
 - **srv**, **dkt** — baseline `inet filter` skeleton (no restrictive policy).
 
 **Admin (SSH) source ranges** allowed on the gateways: IPv4 `49.255.230.48/29`,

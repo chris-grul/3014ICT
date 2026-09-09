@@ -286,11 +286,13 @@ build_demos() {
             ;;
           dkt)
             slide "Web access via the proxy" "explicit proxy -> DMZ web server (note Squid Via/X-Cache headers)" text "curl -sS -x http://10.10.1.254:8080 -D - -o /dev/null http://192.168.1.80/ | head -12"
-            # Not 'direct': the desktop's :443 is transparently redirected into
-            # Squid ssl-bump. Request by NAME so SNI is present (a bare IP has no
-            # SNI and Squid returns 503). This shows DNS -> transparent proxy ->
-            # server, on both stacks.
-            slide "Web by name (via transparent proxy)" "DNS name -> Squid ssl-bump -> server, IPv4 + IPv6" text "echo '== IPv4 =='; curl -4 -sSik https://www.${LAB_DOMAIN}/ | head -10; echo; echo '== IPv6 =='; curl -6 -sSik https://www.${LAB_DOMAIN}/ | head -10"
+            # srv (192.168.1.80 / df10::80) is excluded from the transparent
+            # ssl-bump intercept on igw, so the desktop reaches Apache DIRECTLY on
+            # both stacks — a bare-IP HTTPS request works (no bump, no SNI needed).
+            # The ssl-bump + office-hours .au deny still apply to EXTERNAL traffic
+            # (demo that by driving an .au site in the browser, then the igw DENIED
+            # log slide) — just not to the DMZ server.
+            slide "DMZ web server (direct, IPv4 + IPv6)" "srv bypasses ssl-bump -> Apache direct on both stacks" text "echo '== IPv4 =='; curl -4 -sSik https://192.168.1.80/ | head -10; echo; echo '== IPv6 =='; curl -6 -sSik 'https://[2404:9400:29c1:df10::80]/' | head -10"
             ;;
         esac
         ;;

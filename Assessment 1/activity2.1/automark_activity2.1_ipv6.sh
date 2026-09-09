@@ -185,28 +185,6 @@ check_https_insecure() {
     fi
 }
 
-# HTTPS reachability with SNI supplied. The desktop's :443 traffic is
-# transparently redirected into Squid ssl-bump on the Internal Gateway. A bare-IP
-# request carries NO SNI, so Squid cannot peek the host and returns 503. We supply
-# a REAL hostname from the server certificate's SAN list as the SNI, pinned to the
-# target address/family with --resolve (so no DNS is needed, and the address family
-# under test is exact). A real cert name matters especially over IPv6, where Squid
-# may fall back to the SNI to reach/verify the origin — a dummy name then fails.
-# $1=address  $2=curl family flag (-4/-6)  $3=label  $4=error code
-SNI_HOST="www.chrisgrul-3014ict.com"        # present in the web server cert SANs
-check_https_sni() {
-    local addr=$1 fam=$2 label=$3 error_code=$4 http_code
-    http_code=$(curl $fam -sk --resolve "${SNI_HOST}:443:${addr}" -o /dev/null \
-        -w "%{http_code}" --max-time 8 "https://${SNI_HOST}/" 2>/dev/null)
-    if [[ "$http_code" =~ ^[23] ]]; then
-        pass "HTTPS $http_code from $label (SNI ${SNI_HOST})"
-    else
-        fail "$error_code" "$label HTTPS failed — HTTP ${http_code:-no response}"
-        info "Through Squid transparent ssl-bump, a bare-IP request (no SNI) 503s; this test supplies the real cert name ${SNI_HOST} via --resolve."
-        info "If it still 503s over IPv6: confirm Squid gets the original IPv6 destination on intercept and can reach the origin on [::]:443 (sudo ss -tlnp | grep 8443; sudo squid -k parse)."
-    fi
-}
-
 check_internet() {
     local error_code=$1
     local urls=("https://example.com" "https://www.google.com" "https://1.1.1.1")
@@ -817,11 +795,12 @@ run_ubuntu_desktop() {
     echo -e "\n${BOLD}${CYAN}VM detected: Ubuntu Desktop${NC}"
 
     section "Part C — Web Server Access (E7)"
-    # NB: the desktop's web traffic is transparently redirected into Squid on the
-    # Internal Gateway (igw nftables 80->8081, 443->8443 ssl-bump). HTTP carries a
-    # Host header so the IP form is fine; HTTPS needs SNI (see check_https_sni).
-    check_http     "http://192.168.1.80" "Ubuntu Server HTTP (via transparent proxy)" "E7"
-    check_https_sni "192.168.1.80" "-4"  "Ubuntu Server HTTPS (via transparent proxy)" "E7"
+    # The desktop's HTTP/HTTPS traffic to the DMZ server is excluded from Squid's
+    # transparent intercept on the Internal Gateway (igw nftables returns srv's
+    # 80/443 before the redirect), so these reach Apache directly. A bare-IP HTTPS
+    # request therefore works — it is no longer bumped, so no SNI is required.
+    check_http           "http://192.168.1.80"  "Ubuntu Server HTTP (direct)"  "E7"
+    check_https_insecure "https://192.168.1.80" "Ubuntu Server HTTPS (direct)" "E7"
 
     section "Part D — Squid Proxy Reachability (E8)"
     if nc -z -w 3 10.10.1.254 8080 2>/dev/null; then
@@ -858,9 +837,9 @@ run_ubuntu_desktop() {
     check_route6_get "2001:4860:4860::8888" "via 2404:9400:29c1:df20::254" "E14" "internet (default via IntGW)"
 
     section "IPv6 Service — Web Server Access over IPv6 (E18)"
-    # Also transparently bumped by Squid (igw nftables is table inet = v4+v6), so
-    # supply SNI here too rather than requesting the bare IPv6 literal.
-    check_https_sni "2404:9400:29c1:df10::80" "-6" "Ubuntu Server HTTPS over IPv6 (via transparent proxy)" "E18"
+    # srv's 80/443 are excluded from Squid intercept for both families (igw nftables
+    # is table inet = v4+v6), so the bare IPv6 literal reaches Apache directly.
+    check_curl6 "https://[2404:9400:29c1:df10::80]/" "Ubuntu Server HTTPS (direct, IPv6)" "E18"
 
     section "IPv6 Service — Web Access via Squid over IPv6 (E18)"
     # ASSUMPTION: Squid also serves the internal /64 gateway address over IPv6 on 8080.
