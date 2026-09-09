@@ -34,9 +34,11 @@ checks plus coverage of the Remote Gateway / tunnel.
 
 ## Lab domain
 
-`3014ict.chris.grul.me` — split-horizon DNS: public records at the registrar
-(Namecheap), internal view served by BIND9 on the Internal Gateway. Zone files
-live under [`activity2.2/bind/`](./activity2.2/bind/).
+Primary zone `chrisgrul-3014ict.com`, plus `3014ict.chris.grul.me` served as a
+split-horizon internal-only view: public records at the registrar (Namecheap),
+internal view served by BIND9 on the Internal Gateway (forwarding upstream over
+Quad9 DNS-over-TLS). Zone files live under
+[`activity2.2/bind/`](./activity2.2/bind/).
 
 ## Presentation tool
 

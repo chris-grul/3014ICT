@@ -1,4 +1,0 @@
-// Force TCP for forwarders
-// Azure blocks outbound UDP port 53 — TCP-only fixes BIND9 forwarding in this environment
-server 8.8.8.8 { tcp-only yes; };
-server 8.8.4.4 { tcp-only yes; };

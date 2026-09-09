@@ -11,9 +11,10 @@ Activity 4.1 (standalone firewall hardening) and 4.2 (OpenVPN) are not yet
 built out on the boxes — an `openvpn` client unit exists on the Desktop but no
 VPN server is deployed.
 
-**Lab domain:** `3014ict.chris.grul.me` — split-horizon DNS. Public records are
-hosted at the registrar (Namecheap); the internal view is served by BIND9 on
-the Internal Gateway.
+**Lab domains:** the primary zone is `chrisgrul-3014ict.com`, with
+`3014ict.chris.grul.me` served as a split-horizon internal-only view. Public
+records are hosted at the registrar (Namecheap); the internal view is served by
+BIND9 on the Internal Gateway.
 
 **IPv6 allocation:** routed `/56` = `2404:9400:29c1:df00::/56`, delegated to the
 Remote Gateway (a Binary Lane VPS) and carried into the lab over the tunnel.
@@ -105,23 +106,43 @@ subnet `172.16.10.0/24`.
 
 ## Services
 
-- **DNS (BIND9, igw):** authoritative for `3014ict.chris.grul.me` internally,
-  forward-only to `8.8.8.8/8.8.4.4` over **TCP** (Azure blocks UDP/53), DNSSEC
-  validating. Listens on IPv4 (`127.0.0.1`, `192.168.1.1`, `10.10.1.254`) and
-  IPv6 (`::1`, `df10::1`, `df20::254`). Zone files: `db.3014ict.chris.grul.me`
-  (A + AAAA + MX), `db.192.168.1` (v4 PTR), `db.df10.ip6` (v6 PTR). See
-  `activity2.2/bind/`.
-- **Web (Apache, srv):** serves HTTP/HTTPS on `192.168.1.80` and
-  `[2404:9400:29c1:df10::80]`; reachable from outside via egw DNAT.
+- **DNS (BIND9, igw):** master for two forward zones — `chrisgrul-3014ict.com`
+  and the split-horizon internal zone `3014ict.chris.grul.me` (internal view
+  only) — plus reverse zones. Forward-only to **Quad9 over DNS-over-TLS**
+  (`9.9.9.9` / `149.112.112.112` / `2620:fe::f` / `2620:fe::9`, port 853, `tls
+  quad9-dot` → `dns.quad9.net`); DoT is TCP, which is what makes forwarding work
+  through Azure's UDP block (this replaced the earlier `tcp-only` forwarder
+  workaround, now commented out in `named.conf`). DNSSEC validating. Listens on
+  IPv4 (`127.0.0.1`, `192.168.1.1`, `10.10.1.254`) and IPv6 (`::1`, `df10::1`,
+  `df20::254`); allow-query covers the v4 LANs and the whole `df00::/56`. Zone
+  files: `db.chrisgrul-3014ict.com`, `db.3014ict.chris.grul.me` (A/AAAA, CNAME
+  `www`, MX on the `.grul.me` zone), `db.192.168.1` (v4 PTR),
+  `db.2404.9400.29c1.df10` (v6 PTR). The `tls quad9-dot` profile is defined in
+  `named.conf`. See `activity2.2/bind/`.
+- **Web (Apache, srv):** HTTP (`000-default`) + HTTPS (`default-ssl`) on
+  `192.168.1.80` / `[2404:9400:29c1:df10::80]`; the SSL vhost is
+  `chrisgrul-3014ict.com` (ServerAlias covers `www`, the wildcard, and both
+  literal addresses) with a self-signed cert
+  (`/etc/ssl/certs/chrisgrul-3014ICT.crt`). Reachable from outside via egw DNAT.
+  See `activity2.1/default-ssl.conf`.
 - **Proxy (Squid, igw):** explicit `8080`, transparent `8081`, HTTPS ssl-bump
   `8443` (peek→bump). Sample policy blocks `.au` sites during office hours
   (Mon–Fri 09:00–17:00) and allows the internal LAN. See `activity2.1/squid.conf`.
-- **Mail (Postfix + Dovecot, srv):** Maildir delivery via LMTP; trusted
-  networks `192.168.1.0/24` + `10.10.1.0/24`; MX `mail.3014ict.chris.grul.me`.
-  See `activity3/`.
+- **Mail (Postfix + Dovecot, srv):** dual-stack (`inet_protocols = all`),
+  Maildir delivery via LMTP, Dovecot serving `imap pop3 lmtp` with PAM auth
+  (`ssl = no` inside the lab). `mydomain = 3014ict.chris.grul.me`,
+  `myhostname = mail.3014ict.chris.grul.me`; trusted networks
+  `127.0.0.0/8, 192.168.1.0/24, 10.10.1.0/24, [::1]/128, [df00::]/56`. Because
+  direct port-25 egress is blocked, **outbound mail relays through Resend**
+  (`[smtp.resend.com]:587`, SASL + TLS); the relay credential lives in
+  `/etc/postfix/sasl_passwd` on the box and is **not** in the repo or backup.
+  Effective configs: `activity3/postfix/main.cf.as-built`,
+  `activity3/dovecot/dovecot.conf.as-built`.
 
 ## Provenance / redaction
 
-Recovered from the private `chris-grul/3014ICT_backup` per-VM backup. WireGuard
-private/preshared keys and the Squid ssl-bump CA private key are **excluded**;
-only public keys and non-secret directives are reproduced here.
+Recovered from the private `chris-grul/3014ICT_backup` per-VM backup (BIND, mail
+and web configs captured by the extended `tools/lab-backup.sh`). WireGuard
+private/preshared keys, the Squid ssl-bump CA private key, the Postfix
+`sasl_passwd` relay credential, and all TLS private keys are **excluded**; only
+public keys and non-secret directives are reproduced here.

@@ -164,6 +164,8 @@ scrub_secret_files(){
     [ "${INCLUDE_SECRETS:-0}" = "1" ] && return 0
     # BIND control/session HMAC keys, if a broad path ever pulled them in
     rm -f "$DEST"/bind/rndc.key "$DEST"/bind/session.key 2>/dev/null || true
+    # Postfix SASL relay credential (e.g. Resend API key) — never back this up
+    rm -f "$DEST"/postfix/sasl_passwd "$DEST"/postfix/sasl_passwd.db 2>/dev/null || true
     # Dovecot private key/dh material
     rm -rf "$DEST"/dovecot/conf.d/private "$DEST"/dovecot/private 2>/dev/null || true
     # OpenVPN PKI / key material
