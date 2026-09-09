@@ -66,9 +66,18 @@ ACT_HOSTS=(
   4.2 "igw egw ovc"
 )
 
-# ---- Automarker location on each remote (installed by your deploy script) ---
-# Parameterised by activity: automark_activity<x>_ipv6.sh must be deployed.
-remote_automark() { print -r -- "/usr/local/sbin/automark_activity${ACTIVITY}_ipv6.sh" }
+# ---- Automarker location on each remote ------------------------------------
+# Automarkers are run straight from the git checkout that deploy-lab-view.zsh
+# places on each VM, so teaching staff can confirm the exact repo scripts were
+# used in the presentation (verify with: git -C <REPO_DIR> status --porcelain).
+# REPO_DIR is the checkout in the login user's home; keep it in sync with the
+# PRINCIPAL/home used by deploy-lab-view.zsh. The path is emitted single-quoted
+# because "Assessment 1" contains a space.
+REPO_DIR="/home/user/3014ICT"
+REPO_SUBDIR="Assessment 1"
+remote_automark() {
+  print -r -- "'${REPO_DIR}/${REPO_SUBDIR}/activity${ACTIVITY}/automark_activity${ACTIVITY}_ipv6.sh'"
+}
 
 # Per-host SSH login user (rgw's NOPASSWD rights were granted to 'user').
 typeset -A LOGIN_USER
@@ -364,9 +373,9 @@ show_host() {
         wait_for_enter
     done
 
-    # --- automarker (resident on each VM; runs against its own stack) ---
+    # --- automarker (run from the git checkout on each VM; runs against its own stack) ---
     host_banner "$H"
-    print_title "Automarker" "automark_activity${ACTIVITY}_ipv6.sh"
+    print_title "Automarker" "${REPO_SUBDIR}/activity${ACTIVITY}/automark_activity${ACTIVITY}_ipv6.sh (from ${REPO_DIR})"
     run "$H" "sudo $(remote_automark)"
     wait_for_enter
 
