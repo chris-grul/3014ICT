@@ -361,16 +361,25 @@ check_aaaa() {
 #  Activity 2.2 specific IPv6 DNS checks (BIND9 over IPv6)
 # ============================================================================
 
-# BIND9 must be told to listen on IPv6. Shipped config has `listen-on-v6 { none; };`
-# so students must change it to `{ any; }`. Grep the running config file directly.
+# BIND9 must be told to listen on IPv6. The shipped default is `listen-on-v6
+# { none; };` (IPv6 disabled). Students may enable it either with `{ any; }` or by
+# binding explicit IPv6 addresses — both are valid; an explicit list is tighter.
+# We fail only on the disabled default (none) or a missing directive. Grep the
+# config directly; the functional transport test below is the authoritative proof.
 check_listen_on_v6_any() {
-    local code=$1 line
+    local code=$1 line inside
     line=$(grep "listen-on-v6" /etc/bind/named.conf.options 2>/dev/null | head -1)
+    inside=$(echo "$line" | sed -n 's/.*{\(.*\)}.*/\1/p')
     if echo "$line" | grep -qE 'listen-on-v6[[:space:]]*\{[[:space:]]*any[[:space:]]*;'; then
         pass "named.conf.options has listen-on-v6 { any; }"
+    elif echo "$line" | grep -qE 'listen-on-v6[[:space:]]*\{[[:space:]]*none[[:space:]]*;'; then
+        fail "$code" "listen-on-v6 is disabled ({ none; }) in named.conf.options — BIND won't answer over IPv6"
+        info "Enable it: listen-on-v6 { any; };  (or an explicit IPv6 address list)  then: sudo systemctl restart named"
+    elif echo "$inside" | grep -q ':'; then
+        pass "named.conf.options binds explicit IPv6 addresses (listen-on-v6 {${inside}})"
     else
-        fail "$code" "listen-on-v6 { any; } missing in named.conf.options (found: ${line:-none})"
-        info "Edit named.conf.options: listen-on-v6 { any; };  then: sudo systemctl restart named"
+        fail "$code" "listen-on-v6 not enabled in named.conf.options (found: ${line:-none})"
+        info "Enable it: listen-on-v6 { any; };  (or an explicit IPv6 address list)  then: sudo systemctl restart named"
     fi
 }
 
