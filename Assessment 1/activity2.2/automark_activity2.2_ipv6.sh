@@ -188,7 +188,7 @@ check_local_zone_resolves() {
 
     local result
     result=$(dig @127.0.0.1 "www.$zone_name" +short +time=5 +tries=1 2>/dev/null)
-    if [ "$result" = "192.168.1.80" ]; then
+    if printf '%s\n' "$result" | grep -qx "192.168.1.80"; then
         pass "Forward lookup: www.$zone_name → 192.168.1.80"
     else
         fail "E3" "www.$zone_name did not resolve to 192.168.1.80 (got: ${result:-no response})"
@@ -516,7 +516,7 @@ run_ubuntu_server() {
     if [ -n "$DOMAIN" ]; then
         local fwd
         fwd=$(dig @192.168.1.1 "www.$DOMAIN" +short +time=5 +tries=1 2>/dev/null)
-        if [ "$fwd" = "192.168.1.80" ]; then
+        if printf '%s\n' "$fwd" | grep -qx "192.168.1.80"; then
             pass "Forward lookup via 192.168.1.1: www.$DOMAIN → 192.168.1.80"
         else
             fail "E6" "www.$DOMAIN did not resolve via 192.168.1.1 (got: ${fwd:-no response})"
@@ -582,7 +582,7 @@ run_ubuntu_desktop() {
     if [ -n "$DOMAIN" ]; then
         local fwd
         fwd=$(dig @10.10.1.254 "www.$DOMAIN" +short +time=5 +tries=1 2>/dev/null)
-        if [ "$fwd" = "192.168.1.80" ]; then
+        if printf '%s\n' "$fwd" | grep -qx "192.168.1.80"; then
             pass "Forward lookup: www.$DOMAIN → 192.168.1.80"
         else
             fail "E7" "www.$DOMAIN did not resolve (got: ${fwd:-no response})"

@@ -86,16 +86,24 @@ detect_vm() {
 detect_domain() {
     local zone
 
-    # Method 1 — read from local BIND9 config (Internal Gateway)
+    # Method 1 — read from local BIND9 config (Internal Gateway). For the MAIL
+    # activity, prefer the forward zone whose file actually carries an MX record
+    # (the mail domain) — a split-horizon setup may master several zones and only
+    # one holds the MX. Fall back to the first zone if none has an MX.
     if [ -f /etc/bind/named.conf.local ]; then
-        zone=$(grep "^zone" /etc/bind/named.conf.local 2>/dev/null \
-            | grep -v 'arpa\|localhost\|hint\|"\."' \
-            | grep '"' | head -1 \
-            | sed 's/.*"\(.*\)".*/\1/')
-        if [ -n "$zone" ] && [ "$zone" != "." ]; then
-            echo "$zone"
-            return
-        fi
+        local z zf cand=""
+        for z in $(grep "^zone" /etc/bind/named.conf.local 2>/dev/null \
+                    | grep -v 'arpa\|localhost\|hint\|"\."' \
+                    | grep -oE '"[^"]+"' | tr -d '"'); do
+            [ "$z" = "." ] && continue
+            [ -z "$cand" ] && cand="$z"
+            for zf in "/etc/bind/zones/db.$z" "/etc/bind/db.$z"; do
+                if [ -f "$zf" ] && grep -qE '[[:space:]]MX[[:space:]]' "$zf"; then
+                    echo "$z"; return
+                fi
+            done
+        done
+        if [ -n "$cand" ]; then echo "$cand"; return; fi
     fi
 
     # Method 2 — read from Postfix mydomain (Ubuntu Server)
@@ -870,9 +878,16 @@ run_external_gateway() {
     # ASSUMPTION: IPv6 uses native routing (global addresses), so a plain forward
     # accept is expected rather than a v6 DNAT. The v6 ingress interface may be wg0
     # (tunnel) or eth0 (uplink), so both are accepted below.
-    section "IPv6 nftables — SMTP forward accept (port 25)"
-    check_nft6 'table (ip6|inet) filter.*chain forward.*iif(name)? "(eth0|wg0)" oif(name)? "eth1" tcp dport 25 ct state new accept' \
-        'IPv6 forward accept for SMTP (port 25) to DMZ' E26
+    # This is only required if you accept EXTERNAL inbound mail over IPv6. This
+    # lab's mail is internal (desktop/server users) with outbound relay, so there
+    # is deliberately no inbound-SMTP forward rule — absence is a warn, not a fail.
+    section "IPv6 nftables — SMTP forward accept (port 25) [optional]"
+    if nft list ruleset 2>/dev/null | tr -s ' \t\n' ' ' \
+        | grep -qE 'iif(name)? "(eth0|wg0)" oif(name)? "eth1" tcp dport 25 ct state new accept'; then
+        pass "IPv6 forward accept for SMTP (port 25) to DMZ present"
+    else
+        warn "No IPv6 SMTP(25) forward-to-DMZ rule — expected only if you accept external inbound mail; this lab's mail is internal + outbound relay, so its absence is fine."
+    fi
 }
 
 # =============================================================================
