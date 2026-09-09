@@ -556,16 +556,25 @@ run_ubuntu_server() {
         warn "ssl = $ssl_set (expected: no for lab)"
     fi
 
-    # auth_username_format check — the bug we hit during testing
+    # auth_username_format check — the bug we hit during testing.
+    # The effective value for LMTP is what matters: a `protocol lmtp {}` override
+    # wins, otherwise the GLOBAL setting applies. Setting it globally to %n is a
+    # valid (and common) fix for the LMTP "User doesn't exist" rejection, so accept
+    # either placement.
     section "LMTP auth_username_format"
-    local auf
-    auf=$(doveconf 2>/dev/null | awk '/^protocol lmtp \{/,/^\}/' | grep auth_username_format | awk -F= '{print $2}' | tr -d ' ')
+    local auf_lmtp auf_global auf
+    auf_lmtp=$(doveconf 2>/dev/null | awk '/^protocol lmtp \{/,/^\}/' | grep auth_username_format | awk -F= '{print $2}' | tr -d ' ')
+    auf_global=$(doveconf 2>/dev/null | grep -E '^auth_username_format[[:space:]]*=' | awk -F= '{print $2}' | tr -d ' ')
+    auf=${auf_lmtp:-$auf_global}
     if [ "$auf" = "%n" ]; then
-        pass "auth_username_format = %n (inside protocol lmtp block)"
+        if [ -n "$auf_lmtp" ]; then
+            pass "auth_username_format = %n (protocol lmtp block)"
+        else
+            pass "auth_username_format = %n (global — applies to LMTP)"
+        fi
     else
-        fail "E21" "auth_username_format not set to %n in protocol lmtp block"
-        info "Edit /etc/dovecot/conf.d/20-lmtp.conf — add inside the protocol lmtp { } block:"
-        info "  auth_username_format = %n"
+        fail "E21" "auth_username_format not effectively %n for LMTP (got: ${auf:-unset})"
+        info "Set it globally (auth_username_format = %n) or inside protocol lmtp { } in /etc/dovecot/conf.d/, then: sudo systemctl restart dovecot"
     fi
 
     section "Postfix-Dovecot Sockets"
