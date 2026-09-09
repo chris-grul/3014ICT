@@ -67,17 +67,15 @@ ACT_HOSTS=(
 )
 
 # ---- Automarker location on each remote ------------------------------------
-# Automarkers are run straight from the git checkout that deploy-lab-view.zsh
-# places on each VM, so teaching staff can confirm the exact repo scripts were
-# used in the presentation (verify with: git -C <REPO_DIR> status --porcelain).
-# REPO_DIR is the checkout in the login user's home; keep it in sync with the
-# PRINCIPAL/home used by deploy-lab-view.zsh. The path is emitted single-quoted
-# because "Assessment 1" contains a space.
-REPO_DIR="/home/user/3014ICT"
-REPO_SUBDIR="Assessment 1"
-remote_automark() {
-  print -r -- "'${REPO_DIR}/${REPO_SUBDIR}/activity${ACTIVITY}/automark_activity${ACTIVITY}_ipv6.sh'"
-}
+# deploy-lab-view.zsh clones the repo to ~user/3014ICT (for staff to inspect /
+# git-log) and installs root-owned copies of the automarkers into AUTOMARK_DIR.
+# Passwordless sudo is granted ONLY on these fixed, non-user-writable paths, so
+# the script that runs as root cannot be modified by the login user. Verify
+# provenance by diffing an installed copy against the checkout:
+#   diff <(sudo cat AUTOMARK_DIR/automark_activityX_ipv6.sh) \
+#        ~/3014ICT/'Assessment 1'/activityX/automark_activityX_ipv6.sh
+AUTOMARK_DIR="/usr/local/sbin"
+remote_automark() { print -r -- "${AUTOMARK_DIR}/automark_activity${ACTIVITY}_ipv6.sh" }
 
 # Per-host SSH login user (rgw's NOPASSWD rights were granted to 'user').
 typeset -A LOGIN_USER
@@ -373,9 +371,9 @@ show_host() {
         wait_for_enter
     done
 
-    # --- automarker (run from the git checkout on each VM; runs against its own stack) ---
+    # --- automarker (root-owned copy of the repo script; runs against its own stack) ---
     host_banner "$H"
-    print_title "Automarker" "${REPO_SUBDIR}/activity${ACTIVITY}/automark_activity${ACTIVITY}_ipv6.sh (from ${REPO_DIR})"
+    print_title "Automarker" "automark_activity${ACTIVITY}_ipv6.sh (root-owned copy of the ~/3014ICT checkout)"
     run "$H" "sudo $(remote_automark)"
     wait_for_enter
 
