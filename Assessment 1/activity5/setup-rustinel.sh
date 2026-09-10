@@ -110,17 +110,25 @@ if $SUDO "$BIN" setup --help 2>&1 | grep -q -- '--pack'; then PACKFLAG="--pack e
 $SUDO "$BIN" setup $PACKFLAG --yes
 ok "setup complete${PACKFLAG:+ ($PACKFLAG)}"
 
-# ---- 3b. Detect the resulting layout (system vs package-local) --------------
-CONFIG=""
-for c in /etc/rustinel/config.toml "$PKG/config.toml"; do [ -f "$c" ] && CONFIG="$c" && break; done
-if [ -z "$CONFIG" ]; then warn "no config.toml found (looked in /etc/rustinel and $PKG) — cannot continue"; exit 1; fi
+# ---- 3b. Detect the resulting layout from Rustinel itself -------------------
+# `rustinel doctor` prints the paths it ACTUALLY resolves (e.g. the active pack
+# lives under .../rules/current/sigma, not .../rules/sigma) — so read them from
+# there rather than guessing. Fall back to config/defaults if doctor is terse.
+DOC="$($SUDO "$BIN" doctor 2>/dev/null || true)"
+docpath() { printf '%s\n' "$DOC" | sed -n "s|.*$1:[[:space:]]*||p" | head -1; }
+CONFIG="$(docpath 'config file')"
+[ -n "$CONFIG" ] || for c in /etc/rustinel/config.toml "$PKG/config.toml"; do [ -f "$c" ] && CONFIG="$c" && break; done
+if [ -z "$CONFIG" ]; then warn "could not resolve config.toml — cannot continue"; exit 1; fi
 tomlval() { awk -F\" -v k="$1" '$0 ~ "^[[:space:]]*"k"[[:space:]]*=" {print $2; exit}' "$CONFIG" 2>/dev/null; }
-if [ "$CONFIG" = /etc/rustinel/config.toml ]; then MODE=system; RULES_ROOT=/var/lib/rustinel/rules; LOGDEF=/var/log/rustinel
-else MODE=portable; RULES_ROOT="$PKG/rules"; LOGDEF="$PKG/logs"; fi
-SIGDIR="$(tomlval sigma_rules_path)"; SIGDIR="${SIGDIR:-$RULES_ROOT/sigma}"
-YARDIR="$(tomlval yara_rules_path)";  YARDIR="${YARDIR:-$RULES_ROOT/yara}"
-ALERTDIR="$(tomlval directory)";      ALERTDIR="${ALERTDIR:-$LOGDEF}"
-ok "layout: $MODE  |  config=$CONFIG  |  rules=$RULES_ROOT  |  alerts=$ALERTDIR"
+case "$CONFIG" in /etc/rustinel/*) MODE=system; RULES_ROOT=/var/lib/rustinel/rules; LOGDEF=/var/log/rustinel ;;
+                  *) MODE=portable; RULES_ROOT="$PKG/rules"; LOGDEF="$PKG/logs" ;; esac
+# Prefer the doctor-resolved rule dirs (authoritative: this is where Rustinel loads
+# from), then the config value, then a sensible default.
+SIGDIR="$(docpath 'sigma rules')"; SIGDIR="${SIGDIR:-$(tomlval sigma_rules_path)}"; SIGDIR="${SIGDIR:-$RULES_ROOT/current/sigma}"
+YARDIR="$(docpath 'yara rules')";  YARDIR="${YARDIR:-$(tomlval yara_rules_path)}";  YARDIR="${YARDIR:-$RULES_ROOT/current/yara}"
+ALERTDIR="$(docpath 'alerts dir')"; ALERTDIR="${ALERTDIR:-$(tomlval directory)}"; ALERTDIR="${ALERTDIR:-$LOGDEF}"
+ok "layout: $MODE  |  config=$CONFIG"
+ok "rules -> sigma=$SIGDIR  yara=$YARDIR  |  alerts=$ALERTDIR"
 
 # ---- 4. Install the two custom rules ----------------------------------------
 say "Custom rules (SSH brute-force Sigma + EICAR YARA)"
@@ -225,14 +233,18 @@ if [ "$ENABLE_SSH_PW" = 1 ]; then
 fi
 
 # ---- 5. Reload + verify -----------------------------------------------------
+# Reload so the custom rules load, then confirm the managed service is running.
+# Ask Rustinel itself (its `service` subcommand is authoritative) rather than
+# guessing at systemd unit names.
 say "Reload + verify"
-if [ "$MODE" = system ] && systemctl list-unit-files 2>/dev/null | grep -q '^rustinel'; then
-    $SUDO systemctl restart rustinel 2>/dev/null || $SUDO "$BIN" service restart 2>/dev/null || true
-    sleep 2
-    echo -n "  service: "; systemctl is-active rustinel 2>/dev/null || true
+$SUDO "$BIN" service restart 2>/dev/null || $SUDO systemctl restart rustinel 2>/dev/null || true
+sleep 2
+SVC="$($SUDO "$BIN" service status 2>/dev/null | tr 'A-Z' 'a-z')"
+if printf '%s' "$SVC" | grep -q 'running\|active' || systemctl is-active --quiet rustinel 2>/dev/null; then
+    ok "managed service running"
 else
-    $SUDO "$BIN" service restart 2>/dev/null || true
-    warn "no systemd 'rustinel' unit detected — running in $MODE mode. Start it with: sudo $BIN run   (or: cd $PKG && sudo ./rustinel run)"
+    warn "service not reported running — check: sudo $BIN service status  /  journalctl -u rustinel"
+    info "portable fallback if needed: cd $PKG && sudo ./rustinel run"
 fi
 echo; info "health check:"; $SUDO "$BIN" doctor 2>&1 | sed 's/^/    /' | head -20 || true
 
