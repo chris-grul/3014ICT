@@ -278,6 +278,47 @@ MAP_4_2 = r"""
 └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
 """
 
+MAP_5 = r"""
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                  External Zone                                   De-militarised Zone (DMZ)                                                 Internal Zone                                 │
+│                                                                                                                                                                                          │
+│    ┌────────────────┐     ┌───────────────────────────────────────────────┐     ┌───────────────────────────────────────────────┐     ┌───────────────────────────────────────────────┐  │
+│    │                │     │               External Gateway                │     │               Internal Gateway                │     │                    Desktop                    │  │
+│    │                │     │                                          eth1 │◄────┤ eth0 ◄────────────────────────────────────┐   │     │                                               │  │
+│    │                │     │   ┌────────────────── STATIC 192.168.1.254/24 │   ▲ │ │192.168.1.1/24 STATIC                    │   │     │                                               │  │
+│    │                │     │   │  ┌──── STATIC 2404:9400:29c1:df10::254/64 │   │ │ │2404:9400:29c1:df10::1/64 STATIC         │   │     │                                               │  │
+│    │                │     │   │  │                                        │   │ │ │                                         │   │     │                                               │  │
+│    │                │     │   │  │       ┌───────────────────────────┐    │   │ │ │                Services                 │   │     │                                               │  │
+│    │                │     │   │  │       │            wg0            │    │   │ │ │          Squid (Proxy) Server           │   │     │                                               │  │
+│    │                │     │   │  └──────►│ 2404:9400:29c1:df00::1/64 ├─┐  │   │ │ │               DNS Server                │   │     │                                               │  │
+│    │                │     │   │          │          STATIC           │ │  │   │ │ ▼             OpenVPN Server              │   │     │                                               │  │
+│    │                │     │   │          └───────────────────────────┘ │  │   │ │ tun0 ────────────────────────────┐        │   │     │                                               │  │
+│    │                │     │   └─────────────────────┐                  │  │   │ │ 10.8.0.1 STATIC                  │        │   │     │                                               │  │
+│    │                │     │ eth0                    ▼  ┌────────────┐  │  │   │ │ 2404:9400:29c1:df80::1 STATIC    └─────► eth1 │◄────┤ eth0                                          │  │
+│  ┌►│    Internet    │◄─┬──┤ 172.16.10.x/24 DHCP ◄──────┤  wstunnel  │◄─┘  │   │ │                         STATIC 10.10.1.254/24 │     │ 10.10.1.1/24 STATIC                           │  │
+│  │ │                │  │  │ NO IPv6 ROUTE              └────────────┘     │   │ │            STATIC 2404:9400:29c1:df20::254/64 │     │ 2404:9400:29c1:df20::1 STATIC                 │  │
+│  │ │                │  │  └───────────────────────────────────────────────┘   │ └───────────────────────────────────────────────┘     └───────────────────────────────────────────────┘  │
+│  │ │                │  │                                                      │                                                                                                          │
+│  │ │                │  │                                                      │                                                     ┌────────────────────────────────────────────────────┤
+│  │ │                │  │  ┌───────────────────────────────────────────────┐   │ ┌───────────────────────────────────────────────┐   │ ┌────────────────────────────────────────────────┐ │
+│  │ │                │  │  │                Remote Gateway                 │   │ │                    Server                     │   │ │  Zone Legend                       Host Legend │ │
+│  │ │                │  │  │ eth0                                          │   └─┤ eth0                                          │   │ │                                                │ │
+│  │ │                │  └─►│ 112.213.39.252/24 STATIC────────────────────┐ │     │ 192.168.1.80/24 STATIC                        │   │ │  Internet                       Remote Gateway │ │
+│  │ │                │     │ 2404:9400:2:0:216:3eff:fee9:c1df/64 SLAAC   │ │     │ 2404:9400:29c1:df10::80/64 STATIC             │   │ │  External Zone                External Gateway │ │
+│  │ │                │◄────┤ 2404:9400:29c1:df00::/56 ROUTED ◄──────┐    │ │     │                                               │   │ │  Demilitarised Zone           Internal Gateway │ │
+│  │ └────────────────┘     │ ┌─────────────────────────────┐        │    │ │     │                  Services                     │   │ │  Internal Zone                          Server │ │
+│  │ ┌────────────────┐     │ │             wg0             │        │    │ │     │                 Web Server                    │   │ │                                        Desktop │ │
+│  │ │ VPN Client(s)  │     │ │ 2404:9400:29c1:df00::254/64 ├────────┘    │ │     │                Email Server                   │   │ │                                                │ │
+│  └─┤eth0 ◄──┐ ┌───┐ │     │ │           STATIC            │             │ │     │                                               │   │ │                  Route Legend                  │ │
+│    │DHCP    │ │EDR│ │     │ └─────────────────────────────┘             │ │     │                                               │   │ │                                                │ │
+│    │tun0 ───┘ └───┘ │     │               ▲                             │ │     │                                               │   │ │       ───────────────      IPv4-only route     │ │
+│    │10.8.0.x/24 DHCP│     │               │             ┌────────────┐  │ │     │                                               │   │ │       ───────────────      IPv6-only route     │ │
+│    │2404:9400:29c1: │     │               └─────────────┤  wstunnel  │◄─┘ │     │                                               │   │ │       ───────────────     Dual stack route     │ │
+│    │df80::x/64      │     │                             └────────────┘    │     │                                               │   │ │       ───────────────  IPv6 in IPv4 tunnel     │ │
+│    └────────────────┘     └───────────────────────────────────────────────┘     └───────────────────────────────────────────────┘   │ └────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────┘
+"""
+
 # ---- Palette: name -> xterm-256 code (RGB derived, never hand-written) -------
 PAL = {
     "darkred":    124, "red":        167, "medred":     210, "ltred":      174,
@@ -435,6 +476,37 @@ def draw_vpn(cv):
     cv.ink(32, 32, 144, 158, "violet"); cv.ink(33, 33, 144, 158, "blue")
     cv.ink(35, 35, 144, 158, "cyan")
 
+# ---- Small deltas ON TOP of draw_dmz (Activities 4.2 and 5) ------------------
+# Activities 4.2 and 5 use MAP_4_2 / MAP_5, which share the DMZ box/route layout
+# EXCEPT the bottom-left: the Internet box is shortened and a VPN-client box is
+# added below it (Activity 5 also puts an EDR sub-box inside it). So we run the
+# full bespoke draw_dmz FIRST (identical base colouring to every other activity),
+# then apply only the few coordinate-specific fixes here. The Canvas is
+# last-write-wins, so a fill()/ink()/line()/label() below simply overrides
+# whatever draw_dmz painted at those cells — nothing else needs re-doing.
+#
+# Coordinate helpers (0-indexed, inclusive):
+#   cv.fill(r0,r1,c0,c1,colour)              rectangle background
+#   cv.box_draw(r0,r1,c0,c1,fill,border)     filled box + coloured border chars
+#   cv.line(r0,r1,c0,c1,colour)              colour box-drawing chars only
+#   cv.ink(r0,r1,c0,c1,colour[,only_lines])  colour text
+#   cv.label(r0,r1,c0,c1,colour[,bg])        colour text (+ optional background)
+# The reference draw_vpn() above shows the exact fills the 4.2 map needed
+# (Internet shortened to rows 3-26, VPN-client box at rows 28-36, col 5-22) —
+# copy the ones you want from there. Both stubs are intentionally left for you
+# to fill in.
+
+def draw_vpn_extra(cv):
+    """Activity 4.2 deltas on top of draw_dmz. Fill in the few changes.
+    See draw_vpn() above for the coordinates the 4.2 map previously used."""
+    pass
+
+def draw_edr(cv):
+    """Activity 5 (EDR) deltas on top of draw_dmz. Fill in the few changes —
+    e.g. the shortened Internet box, the VPN-client box and its EDR sub-box,
+    the igw tun0 / OpenVPN service lines, and any Activity-5-specific routes."""
+    pass
+
 # =============================================================================
 #  REGISTRY  —  which map + overlay each activity uses.
 #  All activities currently reuse the DMZ map + bespoke overlay. When you paste
@@ -448,7 +520,7 @@ MAPS = {
     "3":   MAP_3,
     "4.1": MAP_4_1,
     "4.2": MAP_4_2,
-    "5":   MAP_4_2,   # Activity 5 (EDR on ovc) reuses the VPN topology map
+    "5":   MAP_5,     # Activity 5 (EDR on ovc) — VPN topology + VPN-client/EDR box
 }
 # OVERLAYS: each activity maps to a LIST of draw functions, applied in order
 # (baseline first, additions on top; last write wins). Activities 1/2.1/2.2/3/4.1
@@ -463,8 +535,8 @@ OVERLAYS = {
     "2.2": [draw_dmz],
     "3":   [draw_dmz],
     "4.1": [draw_dmz],
-    "4.2": [draw_generic, draw_vpn],
-    "5":   [draw_generic, draw_vpn],   # ovc lives in the VPN topology
+    "4.2": [draw_dmz, draw_vpn_extra],   # same base colouring as the rest + a few deltas
+    "5":   [draw_dmz, draw_edr],         # same base colouring as the rest + a few deltas
 }
 def _map_for(activity):      return MAPS.get(activity, MAP_1)
 def _overlays_for(activity): return OVERLAYS.get(activity, [draw_generic])
