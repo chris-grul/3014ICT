@@ -29,6 +29,12 @@ Remote Gateway (a Binary Lane VPS) and carried into the lab over the tunnel.
 | igw   | `internalgateway` | Internal gateway / DNS / web proxy              | `named` (BIND9), `squid`, `nftables`          |
 | srv   | `server`          | DMZ server — web + mail                         | `apache2`, `postfix`, `dovecot`               |
 | dkt   | `desktop`         | Internal workstation (client)                   | `openvpn` client unit                         |
+| ovc   | `openvpnclient`   | Off-net OpenVPN client (4.2 demo)               | `openvpn` (connects `~/client1.ovpn`)         |
+
+ovc is not on the lab LAN — it dials in over the VPN and is reachable only at
+its tunnel-issued address `2404:9400:29c1:df80::1000` once connected. Bring the
+tunnel up (`sudo openvpn --config ~/client1.ovpn`) before deploying to or
+presenting it, and point the `ovc` ssh alias at that address.
 
 ## Addressing
 
@@ -77,6 +83,13 @@ dkt ──(df20::254 / 10.10.1.254)──▶ igw ──(df10::254 / 192.168.1.25
   `192.168.1.1` and `2404:9400:29c1:df80::/64` via `2404:9400:29c1:df10::1` —
   mirroring its existing internal-LAN routes. Without them srv would hand
   VPN-client replies to egw, which has no path to the pools.
+- `egw` carries the same two VPN-pool routes via igw (`10.8.0.0/24` via
+  `192.168.1.1`, `2404:9400:29c1:df80::/64` via `2404:9400:29c1:df10::1`). Its
+  `wg0` pulls a default route (`AllowedIPs = ::/0`), so these more-specific
+  routes — preferred via wg-quick's `suppress_prefixlength 0` rule — are what let
+  admin traffic bound for a VPN client (e.g. ovc at `df80::1000`) reach igw's
+  `tun0` instead of being sent back out the tunnel. Admin reaches ovc as
+  `Chris /48 → rgw → egw (wg0) → egw eth1 → igw → tun0 → ovc df80::1000`.
 
 ## IPv6-over-TCP tunnel (why it exists)
 
@@ -113,7 +126,10 @@ WireGuard is therefore wrapped in **wstunnel** (WebSocket over TCP/443):
   drop`, and ICMPv6 (ND + PMTUD + echo). `output` default-drops with loopback,
   established, `ct state new`, and DNS out. `ip nat` (IPv4-only) DNATs
   `80/443/25 → 192.168.1.80` (per-port), masquerades out `eth0`, and SNATs the
-  server's return traffic to `192.168.1.254`; IPv6 needs no NAT. This passes the
+  server's return traffic to `192.168.1.254`; IPv6 needs no NAT. The
+  source-restricted admin-SSH forward also carries an explicit rule for the VPN
+  pool (`/48 → df80::/64 tcp/22`, alongside the general `/48 → :22` rule) so the
+  admin path to ovc at `df80::1000` is visible in the ruleset. This passes the
   Activity 4.1 automarker in full; `deploy-lab-view.zsh` installs it idempotently
   on egw (detected by the DNAT-to-DMZ signature).
 - **igw** — filter chains are open (it is an internal router); `inet nat`

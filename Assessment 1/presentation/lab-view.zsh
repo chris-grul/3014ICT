@@ -403,11 +403,14 @@ build_demos() {
             slide "nftables — OpenVPN forward/DNAT/SNAT (Part D)" "UDP 1194 -> OpenVPN server on igw (192.168.1.1); 4.1 rules intact" nft "echo '== UDP 1194 rules (forward + DNAT + SNAT) =='; sudo nft list ruleset | grep -E '1194'; echo; echo '== 4.1 web/mail rules still present (regression) =='; sudo nft list ruleset | grep -E 'dport (80|443|25) '"
             ;;
           ovc)
+            # This walk connects over the VPN itself: the `ovc` ssh alias resolves
+            # to the tunnel-issued address 2404:9400:29c1:df80::1000, so reaching
+            # these slides at all already proves the IPv6 tunnel is up.
             # Part E — OpenVPN client installed + config present
             slide "OpenVPN client installed (Part E)" "openvpn + NetworkManager OpenVPN plugin + client1.ovpn present" text "echo -n 'openvpn: '; openvpn --version 2>/dev/null | head -1; dpkg -l 2>/dev/null | grep -q '^ii  network-manager-openvpn ' && echo 'NM OpenVPN plugin: installed'; ls ~/client1.ovpn >/dev/null 2>&1 && echo 'client1.ovpn: present'"
-            # Part F — tunnel up + reach across
-            slide "VPN tunnel up (Part F)" "tun0 addressed from the 10.8.0.0/24 pool" text "ip -brief addr show tun0 2>/dev/null || echo 'no tun0 — is the client connected?'"
-            slide "Reach across the tunnel (Part F)" "ping the server tun0 (10.8.0.1) + reach the DMZ web server (192.168.1.80)" text "echo '== ping IntGW tun0 =='; ping -c3 -W2 10.8.0.1 2>&1 | tail -3; echo; echo '== reach the DMZ over the VPN =='; ping -c3 -W2 192.168.1.80 2>&1 | tail -3; echo; curl -sSI --max-time 5 http://192.168.1.80 2>&1 | head -3"
+            # Part F — tunnel up (both stacks) + reach across
+            slide "VPN tunnel up (Part F)" "tun0 addressed from 10.8.0.0/24 (v4) and df80::/64 (v6 — this host = df80::1000)" text "ip -brief addr show tun0 2>/dev/null || echo 'no tun0 — is the client connected?'; echo; echo -n 'v6 on tun0: '; ip -6 addr show tun0 2>/dev/null | awk '/inet6 .*global/{print \$2}' || echo '(none)'"
+            slide "Reach across the tunnel (Part F)" "ping the server tun0 over both stacks (10.8.0.1 / df80::1) + reach the DMZ web server" text "echo '== ping IntGW tun0 (v4) =='; ping -c3 -W2 10.8.0.1 2>&1 | tail -3; echo; echo '== ping IntGW tun0 (v6) =='; ping -6 -c3 -W2 2404:9400:29c1:df80::1 2>&1 | tail -3; echo; echo '== reach the DMZ over the VPN =='; ping -c3 -W2 192.168.1.80 2>&1 | tail -3; echo; curl -sSI --max-time 5 http://192.168.1.80 2>&1 | head -3"
             ;;
         esac
         ;;
