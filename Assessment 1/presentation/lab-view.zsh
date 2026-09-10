@@ -370,11 +370,14 @@ build_demos() {
             slide "Reach the DMZ server over IPv6 (through egw)" "rgw -> tunnel -> egw forward -> df10::80 web server" text "echo '== ping6 =='; ping -6 -c2 -W2 2404:9400:29c1:df10::80 | tail -3; echo; echo '== HTTPS =='; curl -6 -sSIk 'https://[2404:9400:29c1:df10::80]/' | head -3"
             ;;
           srv)
-            # Reaffirm end-to-end mail delivery AFTER the hardened firewall is in
-            # place. Same Maildir check as Activity 3 (uses the deploy's pinned
-            # ls + find -exec cat grants, which exist on srv whenever the Maildir
-            # does). Send a fresh test email first, then run this to see it landed.
-            slide "Mail still delivered (through the new firewall)" "reaffirm: fresh email -> server-user (user2) Maildir with the 4.1 firewall active" text "echo '== /home/user2/Maildir (new = just delivered, cur = already opened) — check timestamps for your fresh test mail =='; sudo ls -la /home/user2/Maildir/new /home/user2/Maildir/cur 2>/dev/null; echo; echo '== headers of delivered mail (who -> whom) =='; sudo find /home/user2/Maildir/new /home/user2/Maildir/cur -type f -exec cat {} + 2>/dev/null | grep -iE '^(From|To|Subject|Date|Return-Path):'; echo; echo '== raw message on disk =='; sudo find /home/user2/Maildir/new /home/user2/Maildir/cur -type f -exec cat {} + 2>/dev/null | sed -n '1,45p'; echo; echo 'Empty or stale? Send a fresh email (desktop-user -> server-user) with the firewall active, then re-run this host.'"
+            # Reaffirm end-to-end deliverability AFTER the hardened firewall is in
+            # place: desktop-user (user1) emails Chris' uni address (external out),
+            # then the uni reply comes back (return in). Both land in user1's
+            # Maildir; show the two newest — most recent = the return, before it =
+            # the outbound (BCC desktop-user so the sent leg lands here too). Uses
+            # the deploy's pinned labview-maildir-show helper (root-owned).
+            slide "Return deliverability (most recent)" "external reply -> desktop-user (user1) Maildir, through the 4.1 firewall" text "sudo /usr/local/sbin/labview-maildir-show user1 1 2>/dev/null | sed -n '1,45p'"
+            slide "External deliverability (second-most recent)" "the outbound desktop-user -> uni (BCC desktop-user to capture it here)" text "sudo /usr/local/sbin/labview-maildir-show user1 2 2>/dev/null | sed -n '1,45p'"
             ;;
         esac
         ;;
