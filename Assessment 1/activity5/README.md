@@ -41,15 +41,18 @@ Rustinel's packs do **not** ship an auth-failure brute-force rule (their telemet
 ## The three tests (safe, controlled, reversible)
 
 ### 1. EICAR test file
+Rustinel scans **on process-start**, and the raw EICAR file is *not* a Linux executable (it's a DOS string), so `./eicar.com` fails to `exec` and nothing is scanned. Instead, download the standard test file, then wrap its signature in a **runnable ELF** and execute that — so a real process starts whose image carries the EICAR signature:
 ```bash
 wget -qO ~/eicar.com https://secure.eicar.org/eicar.com.txt   # the standard 68-byte AV test file
-chmod +x ~/eicar.com && ~/eicar.com 2>/dev/null; echo done
+cp /bin/true ~/eicar_run          # a valid ELF that runs and exits 0
+cat ~/eicar.com >> ~/eicar_run    # append the EICAR signature to it
+chmod +x ~/eicar_run && ~/eicar_run
 ```
-Rustinel scans **on process-start**, so the file must be *executed*, not just written. Offline alternative (no network): write the signature directly —
+Offline (no network) — replace the `wget` line with:
 ```bash
 printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > ~/eicar.com
 ```
-**Expected:** an EICAR IOC/YARA alert in `/var/log/rustinel/alerts.json*`. **Reverse:** `rm ~/eicar.com`.
+Run it from your home directory (not `/usr/bin` etc.) so it isn't on Rustinel's trusted-path allowlist. **Expected:** the custom `EICAR_Test_File` YARA rule fires — an alert in `/var/log/rustinel/alerts.json*`. (The Essential pack's EICAR **IOC** is a *hash* of the canonical file, which can't be executed on Linux, so the **YARA string** rule is what catches it here.) **Reverse:** `rm -f ~/eicar.com ~/eicar_run`.
 
 ### 2. Network intrusion — reverse shell via `/dev/tcp`
 ```bash
