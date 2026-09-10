@@ -1,0 +1,37 @@
+title: SSH Password Brute Force - Repeated PAM Verification via unix_chkpwd
+id: 87d4f965-e566-4d77-8d17-c6fb0c2fe706
+status: experimental
+description: |
+  Detects unix_chkpwd executions parented by sshd. On Linux/PAM, pam_unix invokes
+  the set-uid helper unix_chkpwd to verify a password against /etc/shadow on every
+  SSH password-authentication attempt (successful OR failed). A rapid burst of these
+  spawns under sshd therefore indicates an SSH password brute-force (MITRE T1110.001).
+  The rule fires once per attempt; the cluster of alerts in a short window is the
+  brute-force signal.
+
+  Custom rule for 3014ICT Activity 5 (EDR): Rustinel's bundled Linux packs do not
+  detect auth-failure brute force — their telemetry is process/file/network, not the
+  auth log — so this maps the attack onto the process-creation event PAM actually
+  produces. Depends on the engine mapping ParentImage; if that field is unavailable,
+  use the companion parent-agnostic rule lin_ssh_bruteforce_unix_chkpwd_broad.yml.
+references:
+  - https://attack.mitre.org/techniques/T1110/001/
+  - https://man7.org/linux/man-pages/man8/unix_chkpwd.8.html
+author: 3014ICT Activity 5 (Chris Grul, s5501035)
+date: 2026/09/10
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  chkpwd:
+    Image|endswith: '/unix_chkpwd'
+  parent_sshd:
+    ParentImage|endswith: '/sshd'
+  condition: chkpwd and parent_sshd
+falsepositives:
+  - Low-volume legitimate SSH password logins. A brute force is distinguished by the
+    burst rate, not a single event.
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1110.001

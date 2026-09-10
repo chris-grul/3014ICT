@@ -448,6 +448,7 @@ MAPS = {
     "3":   MAP_3,
     "4.1": MAP_4_1,
     "4.2": MAP_4_2,
+    "5":   MAP_4_2,   # Activity 5 (EDR on ovc) reuses the VPN topology map
 }
 # OVERLAYS: each activity maps to a LIST of draw functions, applied in order
 # (baseline first, additions on top; last write wins). Activities 1/2.1/2.2/3/4.1
@@ -463,6 +464,7 @@ OVERLAYS = {
     "3":   [draw_dmz],
     "4.1": [draw_dmz],
     "4.2": [draw_generic, draw_vpn],
+    "5":   [draw_generic, draw_vpn],   # ovc lives in the VPN topology
 }
 def _map_for(activity):      return MAPS.get(activity, MAP_1)
 def _overlays_for(activity): return OVERLAYS.get(activity, [draw_generic])

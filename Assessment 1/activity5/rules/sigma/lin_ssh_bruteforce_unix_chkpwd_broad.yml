@@ -1,0 +1,27 @@
+title: PAM Password Verification via unix_chkpwd (brute-force burst, parent-agnostic)
+id: b26ff00d-1c76-4c58-b314-4db751f7faa1
+status: experimental
+description: |
+  Companion/fallback to lin_ssh_bruteforce_unix_chkpwd.yml. Matches every unix_chkpwd
+  execution regardless of parent, for engines that do not map ParentImage. pam_unix
+  runs unix_chkpwd on each password-verification attempt, so a burst is the brute-force
+  signal. Broader than the sshd-scoped rule (also fires for su/login/sudo password
+  checks), so prefer the scoped rule where ParentImage is available; enable this one
+  only if the scoped rule does not fire in your environment.
+references:
+  - https://attack.mitre.org/techniques/T1110/001/
+author: 3014ICT Activity 5 (Chris Grul, s5501035)
+date: 2026/09/10
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  chkpwd:
+    Image|endswith: '/unix_chkpwd'
+  condition: chkpwd
+falsepositives:
+  - Any legitimate password verification (su, sudo, login, SSH). Distinguished by burst rate.
+level: medium
+tags:
+  - attack.credential_access
+  - attack.t1110.001
