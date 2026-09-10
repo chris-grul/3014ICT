@@ -32,7 +32,7 @@ The script downloads and **saves** the official installer for review before runn
 
 | Demo | Detector | Rule | Source |
 |---|---|---|---|
-| 1. EICAR test file | IOC (+ YARA) | EICAR IOC set / `EICAR_Test_File` | Essential pack + `rules/yara/eicar_test.yar` |
+| 1. Malware exec from /tmp | Sigma | *Malware Execution from World-Writable Temp Directory* | **custom** `rules/sigma/lin_malware_exec_from_tmp.yml` |
 | 2. Network intrusion (reverse shell) | Sigma | *Linux Reverse Shell via /dev/tcp* | Essential pack |
 | 3. SSH brute force | Sigma | *SSH Password Brute Force … unix_chkpwd* | **custom** `rules/sigma/lin_ssh_bruteforce_unix_chkpwd.yml` |
 
@@ -40,19 +40,14 @@ Rustinel's packs do **not** ship an auth-failure brute-force rule (their telemet
 
 ## The three tests (safe, controlled, reversible)
 
-### 1. EICAR test file
-Rustinel scans **on process-start**, and the raw EICAR file is *not* a Linux executable (it's a DOS string), so `./eicar.com` fails to `exec` and nothing is scanned. Instead, download the standard test file, then wrap its signature in a **runnable ELF** and execute that — so a real process starts whose image carries the EICAR signature:
+### 1. Malware dropped & executed from /tmp
+Rustinel's YARA and IOC engines run **only on process-start** — there is no on-demand or on-write file scan (the CLI has no `scan` command). The EICAR test file is therefore a poor fit on Linux: the raw file is a DOS string that never executes (so it is never scanned), and appending its signature to a runnable ELF doesn't reliably place it where the on-execute scan reads. So instead we simulate a behaviour that essentially every real Linux malware sample shares — **being dropped into a world-writable directory and run from there** — which Rustinel *does* see the instant the process starts:
 ```bash
-wget -qO ~/eicar.com https://secure.eicar.org/eicar.com.txt   # the standard 68-byte AV test file
-cp /bin/true ~/eicar_run          # a valid ELF that runs and exits 0
-cat ~/eicar.com >> ~/eicar_run    # append the EICAR signature to it
-chmod +x ~/eicar_run && ~/eicar_run
+cp /bin/true /tmp/.systemd-worker   # harmless copy of /bin/true standing in for a dropped payload
+chmod +x /tmp/.systemd-worker
+/tmp/.systemd-worker                # the process image path is under /tmp
 ```
-Offline (no network) — replace the `wget` line with:
-```bash
-printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > ~/eicar.com
-```
-Run it from your home directory (not `/usr/bin` etc.) so it isn't on Rustinel's trusted-path allowlist. **Expected:** the custom `EICAR_Test_File` YARA rule fires — an alert in `/var/log/rustinel/alerts.json*`. (The Essential pack's EICAR **IOC** is a *hash* of the canonical file, which can't be executed on Linux, so the **YARA string** rule is what catches it here.) **Reverse:** `rm -f ~/eicar.com ~/eicar_run`.
+Executing from `/tmp`, `/var/tmp` or `/dev/shm` is a hallmark of real intrusions (MITRE **T1204** User Execution / **T1059**); legitimate software almost never does it. **Expected:** the custom *Malware Execution from World-Writable Temp Directory* Sigma rule fires — an alert in `/var/log/rustinel/alerts.json*`. **Reverse:** `rm -f /tmp/.systemd-worker`.
 
 ### 2. Network intrusion — reverse shell via `/dev/tcp`
 ```bash
@@ -82,13 +77,13 @@ sudo tail -f /var/log/rustinel/alerts.json*
 
 | Test | Triggered rule | Alert seen? | Notes |
 |---|---|---|---|
-| EICAR | EICAR IOC / `EICAR_Test_File` | ☐ | |
+| Malware exec from /tmp | Malware Execution from World-Writable Temp Directory | ☐ | |
 | Reverse shell | Linux Reverse Shell via /dev/tcp | ☐ | |
 | SSH brute force | SSH Password Brute Force (unix_chkpwd) | ☐ | one alert per attempt; burst = brute force |
 
 ## Cleanup
 ```bash
-rm -f ~/eicar.com
+rm -f /tmp/.systemd-worker
 sudo cp -a /etc/ssh/sshd_config.act5.bak /etc/ssh/sshd_config && sudo systemctl restart ssh   # if you enabled password auth
 sudo rustinel service uninstall     # removes the managed service entirely
 ```

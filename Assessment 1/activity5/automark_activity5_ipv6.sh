@@ -104,6 +104,11 @@ if grep -rqi 'unix_chkpwd' "$sigdir" 2>/dev/null; then
 else
     fail "E6" "SSH brute-force rule missing from $sigdir — re-run setup-rustinel.sh"
 fi
+if grep -rqi 'World-Writable Temp' "$sigdir" 2>/dev/null; then
+    pass "malware /tmp-exec Sigma rule installed"
+else
+    fail "E6" "malware /tmp-exec rule missing from $sigdir — re-run setup-rustinel.sh"
+fi
 if grep -rqi 'EICAR_Test_File' "$yardir" 2>/dev/null; then
     pass "EICAR YARA rule installed"
 else
