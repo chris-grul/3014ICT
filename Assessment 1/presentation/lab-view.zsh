@@ -62,7 +62,7 @@ ACT_HOSTS=(
   2.1 "egw srv igw dkt"
   2.2 "igw srv dkt"
   3   "srv igw dkt"
-  4.1 "egw rgw"
+  4.1 "egw rgw srv"
   4.2 "igw egw ovc"
 )
 
@@ -369,6 +369,13 @@ build_demos() {
             # eth1 -> DMZ server. This genuinely traverses egw's IPv6 forward rules.
             slide "Reach the DMZ server over IPv6 (through egw)" "rgw -> tunnel -> egw forward -> df10::80 web server" text "echo '== ping6 =='; ping -6 -c2 -W2 2404:9400:29c1:df10::80 | tail -3; echo; echo '== HTTPS =='; curl -6 -sSIk 'https://[2404:9400:29c1:df10::80]/' | head -3"
             ;;
+          srv)
+            # Reaffirm end-to-end mail delivery AFTER the hardened firewall is in
+            # place. Same Maildir check as Activity 3 (uses the deploy's pinned
+            # ls + find -exec cat grants, which exist on srv whenever the Maildir
+            # does). Send a fresh test email first, then run this to see it landed.
+            slide "Mail still delivered (through the new firewall)" "reaffirm: fresh email -> server-user (user2) Maildir with the 4.1 firewall active" text "echo '== /home/user2/Maildir (new = just delivered, cur = already opened) — check timestamps for your fresh test mail =='; sudo ls -la /home/user2/Maildir/new /home/user2/Maildir/cur 2>/dev/null; echo; echo '== headers of delivered mail (who -> whom) =='; sudo find /home/user2/Maildir/new /home/user2/Maildir/cur -type f -exec cat {} + 2>/dev/null | grep -iE '^(From|To|Subject|Date|Return-Path):'; echo; echo '== raw message on disk =='; sudo find /home/user2/Maildir/new /home/user2/Maildir/cur -type f -exec cat {} + 2>/dev/null | sed -n '1,45p'; echo; echo 'Empty or stale? Send a fresh email (desktop-user -> server-user) with the firewall active, then re-run this host.'"
+            ;;
         esac
         ;;
       # ---- Activity 4.2: VPN (OpenVPN server on IntGW, client = ovc) --------
@@ -416,7 +423,11 @@ show_host() {
     # --- automarker (root-owned copy of the repo script; runs against its own stack) ---
     host_banner "$H"
     print_title "Automarker" "automark_activity${ACTIVITY}_ipv6.sh (root-owned copy of the ~/3014ICT checkout)"
-    run "$H" "sudo $(remote_automark)"
+    # Run the automarker only where the deploy installed one for this activity.
+    # A host walked purely for a demo slide (e.g. srv in Activity 4.1, for the
+    # mail-delivery reaffirmation) has no automarker for it — skip gracefully with
+    # sudo -n so it never falls back to an interactive password prompt.
+    run "$H" "if [ -e '$(remote_automark)' ]; then sudo -n $(remote_automark); else echo '(No Activity ${ACTIVITY} automarker installed on this host — it contributes demo slides only.)'; fi"
     wait_for_enter
 
     # --- IPv6 verification (labels local, tests run on the remote) ---
