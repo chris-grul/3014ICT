@@ -6,10 +6,11 @@ addressing, routing, service placement and the IPv6 tunnel. The per-activity
 folders remain the step-by-step teaching material; this file describes the
 end state the machines are actually running.
 
-**Completion status:** configured **up to and including Activity 3** (Mail).
-Activity 4.1 (standalone firewall hardening) and 4.2 (OpenVPN) are not yet
-built out on the boxes — an `openvpn` client unit exists on the Desktop but no
-VPN server is deployed.
+**Completion status:** configured **through Activity 4.2** (OpenVPN). The
+converged dual-stack firewall (4.1) is on egw, and the OpenVPN server (4.2) runs
+on igw with an IPv6 tunnel pool. Remote clients connect to egw's public UDP 1194
+(DNAT'd to igw) and are addressed from `10.8.0.0/24` and
+`2404:9400:29c1:df80::/64`.
 
 **Lab domains:** the primary zone is `chrisgrul-3014ict.com`, with
 `3014ict.chris.grul.me` served as a split-horizon internal-only view. Public
@@ -27,7 +28,7 @@ Remote Gateway (a Binary Lane VPS) and carried into the lab over the tunnel.
 | egw   | `externalgateway` | Perimeter gateway / NAT / tunnel client         | `wstunnel-client`, `wg-quick@wg0`, `wg-watchdog.timer`, `nftables` |
 | igw   | `internalgateway` | Internal gateway / DNS / web proxy              | `named` (BIND9), `squid`, `nftables`          |
 | srv   | `server`          | DMZ server — web + mail                         | `apache2`, `postfix`, `dovecot`               |
-| dkt   | `desktop`         | Internal workstation (client)                   | (`openvpn` client unit present; 4.2 pending)  |
+| dkt   | `desktop`         | Internal workstation (client)                   | `openvpn` client unit                         |
 
 ## Addressing
 
@@ -50,6 +51,7 @@ Remote Gateway (a Binary Lane VPS) and carried into the lab over the tunnel.
 | `2404:9400:29c1:df00::/64`       | —                 | WireGuard tunnel transit        | rgw `::254`, egw `::1`                     |
 | `2404:9400:29c1:df10::/64`       | `192.168.1.0/24`  | DMZ                             | egw `::254`, igw `::1`, srv `::80`         |
 | `2404:9400:29c1:df20::/64`       | `10.10.1.0/24`    | Internal LAN                    | igw `::254`, dkt `::1`                     |
+| `2404:9400:29c1:df80::/64`       | `10.8.0.0/24`     | OpenVPN client pool (4.2)       | igw tun0 `::1` / `10.8.0.1`, clients      |
 | —                                | `172.16.10.0/24`  | Azure WAN upstream (egw eth0)   | egw `172.16.10.100`                        |
 
 ## Routing
@@ -70,6 +72,11 @@ dkt ──(df20::254 / 10.10.1.254)──▶ igw ──(df10::254 / 192.168.1.25
 - `igw` and `dkt` carry a default route toward `df10::254` / `df20::254`
   respectively; forwarding sysctls (`net.ipv4.ip_forward`,
   `net.ipv6.conf.all.forwarding`) are enabled on rgw, egw and igw.
+- `srv`'s default routes point at egw, but the OpenVPN server sits on igw, so srv
+  carries explicit return routes for the VPN pools via igw — `10.8.0.0/24` via
+  `192.168.1.1` and `2404:9400:29c1:df80::/64` via `2404:9400:29c1:df10::1` —
+  mirroring its existing internal-LAN routes. Without them srv would hand
+  VPN-client replies to egw, which has no path to the pools.
 
 ## IPv6-over-TCP tunnel (why it exists)
 
