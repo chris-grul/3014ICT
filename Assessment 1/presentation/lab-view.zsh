@@ -480,6 +480,19 @@ show_host() {
         hl "$(run "$H" "traceroute -6 google.com")" ip
         wait_for_enter
     fi
+
+    # --- Activity 5: automatic cleanup & reset (rehearsal-friendly) ---
+    # Runs AFTER the automarker, so it never wipes the alerts the marker checks.
+    # Removes the EICAR test file, forces sshd password auth back to off, and
+    # clears the Rustinel alert log (stop / clear / start) — so each run leaves a
+    # clean slate for the next, and demonstrates the "safe, controlled, reversible"
+    # cleanup the brief asks for. All three actions are pinned NOPASSWD helpers.
+    if [[ "$ACTIVITY" == 5 ]]; then
+        host_banner "$H"
+        print_title "Cleanup & reset" "remove the EICAR file, disable sshd password auth, clear the alert log"
+        hl "$(run "$H" "rm -f ~/eicar.com && echo 'removed ~/eicar.com'; sudo /usr/local/sbin/labview-ssh-passwordauth off; sudo /usr/local/sbin/labview-rustinel-reset")" text
+        wait_for_enter
+    fi
 }
 
 # =============================================================================
