@@ -25,7 +25,8 @@
 #   E14 — IPv6 nftables rule missing (UDP 1194 accept in ip6/inet family)
 #   E15 — IPv6 connectivity failed (ping6 to a lab peer / across the tunnel)
 #   E16 — No IPv6 internet access
-#   E17 — OpenVPN IPv6 service not listening on a v6 transport (when v6-configured)
+#   E17 — OpenVPN not listening on an IPv6 transport — ONLY when proto is udp6/tcp6
+#         (server-ipv6 alone = IPv6 inside an IPv4-transport tunnel; no v6 listener)
 #   E18 — IPv6 tunnel services down (Remote Gateway: wstunnel-server / wg-quick@wg0
 #         inactive, or no WireGuard handshake on wg0)
 #
@@ -150,15 +151,18 @@ check_internet6() {
 }
 
 # ---- IPv6 service listener (checks something is bound on a v6 address:port) ----
-# check_listen6 <port> <label> <code>
+# check_listen6 <port> <label> <code> [proto]   proto = tcp (default) | udp
+# NB: OpenVPN with 'proto udp6' binds a UDP socket, so probe UDP — a TCP probe
+# (-t) would never see it. Only meaningful when the TRANSPORT is IPv6.
 check_listen6() {
-    local port=$1 label=$2 code=$3 laddrs
-    laddrs=$(ss -H -ltn "( sport = :$port )" 2>/dev/null | awk '{print $4}')
+    local port=$1 label=$2 code=$3 proto=${4:-tcp} flag laddrs
+    case "$proto" in udp) flag="-lun";; *) flag="-ltn"; proto=tcp;; esac
+    laddrs=$(ss -H $flag "( sport = :$port )" 2>/dev/null | awk '{print $4}')
     # v6 listener shows as [::]:port, [::1]:port, [2404:...]:port, or *:port (dual-stack)
     if echo "$laddrs" | grep -qE '^\[|^\*:'; then
-        pass "$label listening on IPv6 (port $port)"
+        pass "$label listening on IPv6 ($proto port $port)"
     else
-        fail "$code" "$label not listening on IPv6 (port $port) — found: ${laddrs:-none}"
+        fail "$code" "$label not listening on IPv6 ($proto port $port) — found: ${laddrs:-none}"
     fi
 }
 
@@ -476,17 +480,25 @@ run_internal_gateway() {
     section "IPv6 Internet"
     check_internet6 E16
 
-    section "IPv6 — OpenVPN server transport"
-    # ASSUMPTION: the supplied server.conf is IPv4-only ('proto udp' + 'server 10.8.0.0').
-    # Every item below is SOFT — it only fails when server.conf actually shows IPv6 intent.
+    section "IPv6 — OpenVPN server (tunnel-internal v6 + optional v6 transport)"
+    # server.conf can express two INDEPENDENT things, and they must not be conflated:
+    #   * server-ipv6 / tun-ipv6  → IPv6 carried INSIDE the tunnel (clients get a
+    #     global v6 on tun0). This is our design; the transport stays IPv4.
+    #   * proto udp6 / tcp6       → the OpenVPN TRANSPORT itself is IPv6 (a v6 listen
+    #     socket on :1194). We do NOT use this — clients reach the server via the
+    #     ExtGW's IPv4 DNAT of UDP 1194 — so an IPv6 listener is NOT expected here.
     SRVCONF="/etc/openvpn/server.conf"
-    if [ -f "$SRVCONF" ] && grep -Eq '^[[:space:]]*(proto[[:space:]]+udp6|proto[[:space:]]+tcp6|server-ipv6|tun-ipv6)' "$SRVCONF"; then
-        info "server.conf shows IPv6 intent — enforcing OpenVPN IPv6 checks"
-        # ASSUMPTION: a v6-configured server listens on an IPv6 transport for 1194
-        check_listen6 1194 "OpenVPN server" E17
-        # ASSUMPTION: tun0 carries a global IPv6 (from the server-ipv6 pool); exact subnet unknown
+    v6_intunnel=0; v6_transport=""
+    if [ -f "$SRVCONF" ]; then
+        grep -Eq '^[[:space:]]*(server-ipv6|tun-ipv6)' "$SRVCONF" && v6_intunnel=1
+        grep -Eq '^[[:space:]]*proto[[:space:]]+udp6' "$SRVCONF" && v6_transport=udp
+        grep -Eq '^[[:space:]]*proto[[:space:]]+tcp6' "$SRVCONF" && v6_transport=tcp
+    fi
+    if [ "$v6_intunnel" = 1 ] || [ -n "$v6_transport" ]; then
+        info "server.conf shows IPv6 intent — enforcing tunnel-internal IPv6 checks"
+        # tun0 carries a global IPv6 from the server-ipv6 pool (server end = ::1)
         check_ip6_has_global tun0 E11
-        # ASSUMPTION: connected clients sit at <tun0-prefix>::1000+ ; best-effort ping of one
+        # connected clients sit at <tun0-prefix>::1000+ ; best-effort ping of one
         TUN6NET=$(ip -6 route show dev tun0 2>/dev/null | awk '/\/64/{print $1; exit}')
         if [ -n "$TUN6NET" ]; then
             PEER6="${TUN6NET%::/64}::1000"
@@ -495,9 +507,17 @@ run_internal_gateway() {
         else
             warn "tun0 has no IPv6 /64 route — cannot derive a tunnel peer to ping6 (skipped)"
         fi
+        # Only require an IPv6 LISTEN socket when the TRANSPORT is IPv6 (proto udp6/tcp6).
+        # With 'server-ipv6' alone the transport is IPv4 (clients arrive via the ExtGW
+        # DNAT), so there is deliberately no v6 listener — E17 is N/A, not a failure.
+        if [ -n "$v6_transport" ]; then
+            check_listen6 1194 "OpenVPN server" E17 "$v6_transport"
+        else
+            info "transport is IPv4 (no proto udp6/tcp6); IPv6 is tunnel-internal — no v6 listener expected (E17 N/A)"
+        fi
     else
-        warn "server.conf has no IPv6 directive (proto udp6 / server-ipv6 / tun-ipv6) — OpenVPN IPv6 transport not configured; skipping v6 VPN checks"
-        info "ASSUMPTION: to enable, add e.g. 'proto udp6' and 'server-ipv6 2404:9400:29c1:dfXX::/64' to server.conf"
+        warn "server.conf has no IPv6 directive (server-ipv6 / tun-ipv6 / proto udp6) — OpenVPN IPv6 not configured; skipping v6 VPN checks"
+        info "ASSUMPTION: to carry IPv6 in the tunnel, add e.g. 'server-ipv6 2404:9400:29c1:dfXX::/64' to server.conf"
     fi
 }
 
@@ -648,26 +668,29 @@ run_openvpn_client() {
     # =========================================================================
     section "IPv6 — VPN over IPv6 (across the tunnel)"
     OVPN="$USER_HOME/client1.ovpn"
-    if [ -f "$OVPN" ] && grep -Eiq '^[[:space:]]*proto[[:space:]]+(udp6|tcp6)|^[[:space:]]*remote[[:space:]]+[0-9a-f]*:[0-9a-f:]+' "$OVPN"; then
-        info "client1.ovpn shows IPv6 intent — enforcing IPv6 tunnel checks"
-        if ip addr show tun0 >/dev/null 2>&1; then
-            # ASSUMPTION: tun0 receives a global IPv6 from the server's server-ipv6 pool
-            check_ip6_has_global tun0 E11
-            # ASSUMPTION: the server end of the tunnel is <tun0-prefix>::1
-            TUN6NET=$(ip -6 route show dev tun0 2>/dev/null | awk '/\/64/{print $1; exit}')
-            if [ -n "$TUN6NET" ]; then
-                PEER6="${TUN6NET%::/64}::1"
-                info "ASSUMPTION: pinging the OpenVPN server end of the tunnel ($PEER6)"
-                check_ping6 "$PEER6" "OpenVPN server over tunnel" E15
-            else
-                warn "tun0 has no IPv6 /64 route — cannot derive the server tunnel address (skipped)"
-            fi
+    # The real evidence of IPv6-in-the-tunnel is a GLOBAL v6 on tun0 (pushed by the
+    # server's server-ipv6 pool) — the client transport can stay IPv4. So drive the
+    # checks off tun0 itself, not off an IPv6 directive in client1.ovpn (there won't
+    # be one: the client learns its v6 from the server push, on tun0).
+    TUN6=$(ip -6 addr show tun0 scope global 2>/dev/null | awk '/inet6/{print $2; exit}')
+    if [ -n "$TUN6" ]; then
+        info "tun0 holds a global IPv6 ($TUN6) — IPv6 is carried across the tunnel"
+        check_ip6_has_global tun0 E11
+        # the server end of the tunnel is <tun0-prefix>::1
+        TUN6NET=$(ip -6 route show dev tun0 2>/dev/null | awk '/\/64/{print $1; exit}')
+        if [ -n "$TUN6NET" ]; then
+            PEER6="${TUN6NET%::/64}::1"
+            info "ASSUMPTION: pinging the OpenVPN server end of the tunnel ($PEER6)"
+            check_ping6 "$PEER6" "OpenVPN server over tunnel" E15
         else
-            fail "E15" "tun0 absent — cannot verify IPv6 across the tunnel (VPN not connected)"
+            warn "tun0 has no IPv6 /64 route — cannot derive the server tunnel address (skipped)"
         fi
+    elif [ -f "$OVPN" ] && grep -Eiq '^[[:space:]]*proto[[:space:]]+(udp6|tcp6)|^[[:space:]]*remote[[:space:]]+[0-9a-f]*:[0-9a-f:]+' "$OVPN"; then
+        # config expresses IPv6 intent but tun0 carries no global v6 → genuinely not up
+        fail "E15" "client1.ovpn shows IPv6 intent but tun0 has no global IPv6 — VPN IPv6 not established"
     else
-        warn "client1.ovpn has no IPv6 directive (proto udp6 / IPv6 remote) — VPN-over-IPv6 not configured; skipping (ASSUMPTION)"
-        info "ASSUMPTION: to test, the server must push an IPv6 tunnel (server-ipv6) and the client use an IPv6 transport"
+        warn "tun0 has no global IPv6 and client1.ovpn shows none — VPN-over-IPv6 not configured; skipping (ASSUMPTION)"
+        info "ASSUMPTION: to carry IPv6, the server pushes it (server-ipv6); the client picks it up on tun0"
     fi
 
     section "IPv6 Internet (host)"
