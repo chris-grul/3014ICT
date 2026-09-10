@@ -29,10 +29,18 @@ info() { echo -e "  ${CYAN}[INFO]${NC} $1"; }
 warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
 section() { echo ""; echo -e "${BOLD}--- $1 ---${NC}"; }
 
-CONFIG=/etc/rustinel/config.toml
-# Resolve the Rustinel binary (may be off root's PATH, e.g. /opt/rustinel/rustinel).
+# Detect the layout: `rustinel setup` may produce the system layout
+# (/etc/rustinel + /var/log/rustinel) or leave the package-local layout under
+# /opt/rustinel. Resolve config, rules root and alert dir for whichever exists.
+CONFIG=""; for c in /etc/rustinel/config.toml /opt/rustinel/config.toml; do
+    [ -f "$c" ] && CONFIG="$c" && break
+done
+CONFIG="${CONFIG:-/etc/rustinel/config.toml}"
+if [ "$CONFIG" = /etc/rustinel/config.toml ]; then RROOT=/var/lib/rustinel/rules; LOGDEF=/var/log/rustinel
+else RROOT=/opt/rustinel/rules; LOGDEF=/opt/rustinel/logs; fi
+# Resolve the Rustinel binary (never on PATH: the installer places it by path).
 RB="$(command -v rustinel 2>/dev/null || true)"
-[ -n "$RB" ] || for p in /usr/local/bin/rustinel /opt/rustinel/rustinel /usr/bin/rustinel; do
+[ -n "$RB" ] || for p in /opt/rustinel/rustinel /usr/local/bin/rustinel /usr/bin/rustinel; do
     [ -x "$p" ] && RB="$p" && break
 done
 echo -e "\n${BOLD}${CYAN}VM detected: OpenVPN Client (ovc) — Activity 5 EDR${NC}"
@@ -68,10 +76,10 @@ else
 fi
 rm -f /tmp/rustinel_doctor.$$ 2>/dev/null
 
-# Resolve rule dirs from config, with managed defaults.
-sigdir="$(awk -F\" '/^[[:space:]]*sigma_rules_path/{print $2}' "$CONFIG" 2>/dev/null)"; sigdir="${sigdir:-/var/lib/rustinel/rules/sigma}"
-yardir="$(awk -F\" '/^[[:space:]]*yara_rules_path/{print $2}'  "$CONFIG" 2>/dev/null)"; yardir="${yardir:-/var/lib/rustinel/rules/yara}"
-RULES_ROOT=/var/lib/rustinel/rules
+# Resolve rule dirs from config, with the detected layout's defaults.
+sigdir="$(awk -F\" '/^[[:space:]]*sigma_rules_path/{print $2}' "$CONFIG" 2>/dev/null)"; sigdir="${sigdir:-$RROOT/sigma}"
+yardir="$(awk -F\" '/^[[:space:]]*yara_rules_path/{print $2}'  "$CONFIG" 2>/dev/null)"; yardir="${yardir:-$RROOT/yara}"
+RULES_ROOT="$RROOT"
 
 section "Essential Pack Rules"
 if grep -rqiE 'dev/tcp|reverse[ _-]?shell' "$RULES_ROOT" 2>/dev/null; then
@@ -105,7 +113,7 @@ grep -qE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true'       "$CONFIG" 2>/
 if [ "$en_ok" = 1 ]; then pass "sigma + yara + ioc enabled in $CONFIG"; else fail "E7" "a scanner/IOC is not enabled in $CONFIG"; fi
 
 section "Alert Pipeline (ECS NDJSON)"
-ALERTDIR="$(awk -F\" '/^[[:space:]]*directory/{print $2}' "$CONFIG" 2>/dev/null)"; ALERTDIR="${ALERTDIR:-/var/log/rustinel}"
+ALERTDIR="$(awk -F\" '/^[[:space:]]*directory/{print $2}' "$CONFIG" 2>/dev/null)"; ALERTDIR="${ALERTDIR:-$LOGDEF}"
 if ls "$ALERTDIR"/alerts.json* >/dev/null 2>&1; then
     n=$(cat "$ALERTDIR"/alerts.json* 2>/dev/null | wc -l)
     pass "alerts written to $ALERTDIR/alerts.json* ($n line(s))"
