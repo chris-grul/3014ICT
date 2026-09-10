@@ -387,15 +387,27 @@ build_demos() {
       4.2)
         case "$H" in
           igw)
-            slide "OpenVPN — server.conf" "proto / dev / server / push (+ IPv6)" ini "sudo grep -vE '^[[:space:]]*[#;]|^[[:space:]]*\$' /etc/openvpn/server.conf"
-            slide "OpenVPN — service + tun0" "server up, tunnel 10.8.0.1 / df80::1" text "systemctl is-active 'openvpn@server' 'openvpn-server@server' 2>/dev/null; echo; ip -brief addr show tun0 2>/dev/null || echo 'no tun0'"
+            # Part A — OpenVPN + Easy-RSA installed, vars created
+            slide "OpenVPN + Easy-RSA (Part A)" "packages, CA toolkit and vars on the Internal Gateway" text "echo -n 'openvpn : '; openvpn --version 2>/dev/null | head -1; ls ~/openvpn-ca/easyrsa >/dev/null 2>&1 && echo 'easy-rsa: present (~/openvpn-ca)'; ls ~/openvpn-ca/vars >/dev/null 2>&1 && echo 'vars    : present'"
+            # Part B — PKI + server certs/keys, built then copied to /etc/openvpn
+            slide "PKI + server certificates (Part B)" "CA, server cert/key, DH, TLS-auth — built, then copied into /etc/openvpn" text "echo '== ~/openvpn-ca PKI =='; ls -1 ~/openvpn-ca/pki/ca.crt ~/openvpn-ca/pki/issued/server.crt ~/openvpn-ca/pki/private/server.key ~/openvpn-ca/pki/dh.pem ~/openvpn-ca/ta.key 2>/dev/null; echo; echo '== /etc/openvpn =='; ls -1 /etc/openvpn/ca.crt /etc/openvpn/server.crt /etc/openvpn/server.key /etc/openvpn/dh2048.pem /etc/openvpn/ta.key 2>/dev/null"
+            slide "OpenVPN — server.conf (Part B)" "proto/dev, server 10.8.0.0, push route+DNS, tls-auth, cipher" ini "sudo cat /etc/openvpn/server.conf | grep -vE '^[[:space:]]*[#;]|^[[:space:]]*\$'"
+            slide "OpenVPN service + tun0 (Part B/F)" "server active + enabled at boot; tun0 = 10.8.0.1" text "echo -n 'active : '; systemctl is-active 'openvpn@server' 2>/dev/null; echo -n 'enabled: '; systemctl is-enabled 'openvpn@server' 2>/dev/null; echo; ip -brief addr show tun0 2>/dev/null || echo 'no tun0'"
+            # Part C — client cert + bundle + base.conf remote IP
+            slide "Client cert + .ovpn bundle (Part C)" "client1 cert/key, client1.ovpn, base.conf remote = egw eth0" text "ls -1 ~/openvpn-ca/pki/issued/client1.crt ~/openvpn-ca/pki/private/client1.key ~/client-configs/files/client1.ovpn 2>/dev/null; echo; echo -n 'base.conf remote -> '; grep -E '^[[:space:]]*remote ' ~/client-configs/base.conf 2>/dev/null"
+            # Part F (server side) — the connected client in the status log
+            slide "Connected VPN client (Part F)" "OpenVPN status log shows the client's 10.8.0.x virtual IP" text "sudo cat /var/log/openvpn/openvpn-status.log 2>/dev/null | sed -n '1,20p' || echo '(no status log — connect a client first)'"
             ;;
           egw)
-            slide "nftables — OpenVPN forward" "UDP 1194 permitted / forwarded" nft "sudo nft list ruleset | grep -iB1 -A1 1194 || sudo nft list ruleset"
+            # Part D — UDP 1194 forward + DNAT + SNAT, added on top of the 4.1 firewall
+            slide "nftables — OpenVPN forward/DNAT/SNAT (Part D)" "UDP 1194 -> OpenVPN server on igw (192.168.1.1); 4.1 rules intact" nft "echo '== UDP 1194 rules (forward + DNAT + SNAT) =='; sudo nft list ruleset | grep -E '1194'; echo; echo '== 4.1 web/mail rules still present (regression) =='; sudo nft list ruleset | grep -E 'dport (80|443|25) '"
             ;;
           ovc)
-            slide "VPN client — tunnel up" "tun0 addressed 10.8.0.x / df80::x" text "ip -brief addr show tun0 2>/dev/null || echo 'no tun0 — is the client connected?'"
-            slide "Reach across the tunnel" "ping the server (10.8.0.1) and the DMZ web server" text "ping -c3 -W2 10.8.0.1 2>&1 | tail -3; echo; ping -c3 -W2 192.168.1.80 2>&1 | tail -3"
+            # Part E — OpenVPN client installed + config present
+            slide "OpenVPN client installed (Part E)" "openvpn + NetworkManager OpenVPN plugin + client1.ovpn present" text "echo -n 'openvpn: '; openvpn --version 2>/dev/null | head -1; dpkg -l 2>/dev/null | grep -q '^ii  network-manager-openvpn ' && echo 'NM OpenVPN plugin: installed'; ls ~/client1.ovpn >/dev/null 2>&1 && echo 'client1.ovpn: present'"
+            # Part F — tunnel up + reach across
+            slide "VPN tunnel up (Part F)" "tun0 addressed from the 10.8.0.0/24 pool" text "ip -brief addr show tun0 2>/dev/null || echo 'no tun0 — is the client connected?'"
+            slide "Reach across the tunnel (Part F)" "ping the server tun0 (10.8.0.1) + reach the DMZ web server (192.168.1.80)" text "echo '== ping IntGW tun0 =='; ping -c3 -W2 10.8.0.1 2>&1 | tail -3; echo; echo '== reach the DMZ over the VPN =='; ping -c3 -W2 192.168.1.80 2>&1 | tail -3; echo; curl -sSI --max-time 5 http://192.168.1.80 2>&1 | head -3"
             ;;
         esac
         ;;
