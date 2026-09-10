@@ -69,11 +69,16 @@ else
 fi
 
 section "Health (rustinel doctor)"
-if "$RB" doctor >/tmp/rustinel_doctor.$$ 2>&1; then
-    pass "doctor reports healthy"
-else
-    fail "E4" "doctor reported a problem:"; sed 's/^/           /' /tmp/rustinel_doctor.$$ | head -8
-fi
+# doctor exits non-zero on WARN as well as FAIL, but WARN is non-fatal (e.g. a
+# telemetry snapshot not yet written). Grade on the reported Status, not the exit
+# code: PASS/WARN are healthy, only FAIL (or no status) is a problem.
+"$RB" doctor >/tmp/rustinel_doctor.$$ 2>&1 || true
+dstat="$(grep -oiE 'Status:[[:space:]]*(PASS|WARN|FAIL)' /tmp/rustinel_doctor.$$ 2>/dev/null | grep -oiE 'PASS|WARN|FAIL' | head -1 | tr '[:lower:]' '[:upper:]')"
+case "$dstat" in
+    PASS) pass "doctor reports healthy (PASS)" ;;
+    WARN) pass "doctor healthy with warnings (WARN — non-fatal)" ;;
+    *)    fail "E4" "doctor reported a problem:"; sed 's/^/           /' /tmp/rustinel_doctor.$$ | head -8 ;;
+esac
 rm -f /tmp/rustinel_doctor.$$ 2>/dev/null
 
 # Resolve rule dirs from config, with the detected layout's defaults.
@@ -113,12 +118,17 @@ grep -qE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true'       "$CONFIG" 2>/
 if [ "$en_ok" = 1 ]; then pass "sigma + yara + ioc enabled in $CONFIG"; else fail "E7" "a scanner/IOC is not enabled in $CONFIG"; fi
 
 section "Alert Pipeline (ECS NDJSON)"
-ALERTDIR="$(awk -F\" '/^[[:space:]]*directory/{print $2}' "$CONFIG" 2>/dev/null)"; ALERTDIR="${ALERTDIR:-$LOGDEF}"
-if ls "$ALERTDIR"/alerts.json* >/dev/null 2>&1; then
+# Search the known alert dirs directly rather than parsing the config (the managed
+# config has several `directory =` keys, so an awk match could grab the wrong one).
+ALERTDIR=""
+for d in "$LOGDEF" /var/log/rustinel /opt/rustinel/logs; do
+    [ -n "$d" ] && ls "$d"/alerts.json* >/dev/null 2>&1 && ALERTDIR="$d" && break
+done
+if [ -n "$ALERTDIR" ]; then
     n=$(cat "$ALERTDIR"/alerts.json* 2>/dev/null | wc -l)
     pass "alerts written to $ALERTDIR/alerts.json* ($n line(s))"
 else
-    fail "E8" "no alert file in $ALERTDIR — trigger the bundled demo rule: run 'whoami' with the agent up"
+    fail "E8" "no alert file in /var/log/rustinel or /opt/rustinel/logs — trigger a detection (or 'whoami') with the agent up"
 fi
 
 echo ""

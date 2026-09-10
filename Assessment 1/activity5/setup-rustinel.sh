@@ -214,7 +214,11 @@ PY
 ensure_toml scanner sigma_enabled true
 ensure_toml scanner yara_enabled  true
 ensure_toml ioc     enabled        true
-ok "scanner (sigma+yara) and IOC matching enabled"
+# Include the matched selections/values in each alert (why it fired) — great for
+# the demo. Core fields (rule.name, process.command_line, severity) are present
+# regardless; this adds the match detail under [alerts] match_debug.
+ensure_toml alerts  match_debug    '"full"'
+ok "scanner (sigma+yara) and IOC matching enabled; alert match_debug=full"
 
 # ---- 4b. (opt-in) enable sshd password auth so the brute-force demo can run --
 if [ "$ENABLE_SSH_PW" = 1 ]; then
