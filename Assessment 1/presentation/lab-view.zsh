@@ -371,13 +371,15 @@ build_demos() {
             ;;
           srv)
             # Reaffirm end-to-end deliverability AFTER the hardened firewall is in
-            # place: desktop-user (user1) emails Chris' uni address (external out),
-            # then the uni reply comes back (return in). Both land in user1's
-            # Maildir; show the two newest — most recent = the return, before it =
-            # the outbound (BCC desktop-user so the sent leg lands here too). Uses
-            # the deploy's pinned labview-maildir-show helper (root-owned).
-            slide "Return deliverability (most recent)" "external reply -> desktop-user (user1) Maildir, through the 4.1 firewall" text "sudo /usr/local/sbin/labview-maildir-show user1 1 2>/dev/null | sed -n '1,45p'"
-            slide "External deliverability (second-most recent)" "the outbound desktop-user -> uni (BCC desktop-user to capture it here)" text "sudo /usr/local/sbin/labview-maildir-show user1 2 2>/dev/null | sed -n '1,45p'"
+            # place. Desktop-user (user1) emails Chris' uni address and CCs
+            # server-user (user2); Chris then reply-alls from the uni, CCing
+            # server-user again. So BOTH legs land in server-user's Maildir. Show
+            # the desktop-user side live in Thunderbird; these two slides show the
+            # server-user (user2) copies via the pinned labview-maildir-show helper:
+            # most recent = the uni reply (return), before it = the outbound
+            # (external). Same user2 Maildir source as Activity 3.
+            slide "Return deliverability (server-user, most recent)" "reply-all from the uni CC'd server-user (user2) — inbound through the 4.1 firewall" text "sudo /usr/local/sbin/labview-maildir-show user2 1 2>/dev/null | sed -n '1,45p'"
+            slide "External deliverability (server-user, second-most recent)" "the original desktop-user -> uni, CC'd to server-user (user2)" text "sudo /usr/local/sbin/labview-maildir-show user2 2 2>/dev/null | sed -n '1,45p'"
             ;;
         esac
         ;;
